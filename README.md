@@ -62,8 +62,13 @@ PWA): bật "Lưu audio trên thiết bị này" thì audio nằm trong bộ nh�
 >   `gemma4:e4b` — thắng benchmark trên máy này: 3.3GB RAM, ~5s/chunk; thay thế:
 >   `qwen3.5:latest` chậm hơn, `qwen2.5:7b-instruct-q4_K_M` bảo thủ hơn. Tránh
 >   model thinking như `qwen3:4b`: xả reasoning vào kết quả → hỏng).
-> - `OPENROUTER_API_KEY` — có key thì pass 2 chạy qua OpenRouter thay Ollama
->   (kèm `OPENROUTER_MODEL`, mặc định `anthropic/claude-haiku-4.5`, và `OPENROUTER_URL`).
+> - **Cloud billing (FR-6, tuỳ chọn):** `CLOUD_BILLING=on` + `SUPABASE_URL` +
+>   `SUPABASE_ANON_KEY` — bật backend pass 2 qua cloud (đăng nhập + trả credit,
+>   xem `docs/plan-credit-wallet.md`). `CLOUD_LLM_MODEL` chỉ là tên hiển thị
+>   metadata — model thật đặt bằng secret `OPENROUTER_MODEL` của Edge Function.
+>   `OPENROUTER_API_KEY` KHÔNG còn dùng ở app local (key nằm server-side:
+>   `supabase secrets set OPENROUTER_API_KEY=...`) — nếu từng để trong `.env`,
+>   xoá đi và cân nhắc rotate key.
 
 ## Bước 2 — MCP cho Claude
 Server đọc cùng thư mục `data/transcripts/`. Đăng ký vào Claude Code:

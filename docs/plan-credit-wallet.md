@@ -1,7 +1,17 @@
 # Plan: Ví credit — tính phí token cho LLM cloud
-- **Source**: US-601..606 (PRD FR-6 — NEW, write-back tại T-01/T-02)
-- **Status**: Approved
+- **Source**: US-601..606 (PRD FR-6 — write-back xong tại T-01/T-02)
+- **Status**: Implemented (code + test xong; còn T-19 E2E trên hạ tầng thật)
 - **Updated**: 2026-07-11
+- **Branch**: `feat/credit-wallet` (9 checkpoint commit theo PR plan)
+
+> Trạng thái task: **T-01..T-18, T-20 ✅** · **T-19 ⬜** — chờ tạo Supabase
+> project thật + đăng ký PayOS merchant (việc của owner, xem checklist cuối).
+> Deviation so với plan: PR-6 gộp luôn phần live.py credit_blocked (đổi kiểu
+> trả về của correct_sentence buộc sửa live.py cùng commit để repo xanh);
+> PR-7 chỉ còn wallet endpoints. pgTAP đổi test revoked-RPC sang
+> has_function_privilege (image Postgres local segfault khi authenticated gọi
+> hàm bị revoke — bug supautils, không phải schema) và phát hiện + fix thiếu
+> grant execute cho service_role.
 
 
 ## Context
@@ -109,6 +119,21 @@ PR-1 specs (T-01,02) → PR-2 SQL+pgTAP (T-03,04) → PR-3 llm-correct (T-05,06,
 6. **Refresh token plaintext trong SQLite**: chấp nhận cho app local single-user (ngang `.env` hiện nay) — ghi vào docs.
 7. **Prompt trùng 2 nơi** (Python ↔ TS): drift risk, cross-reference comment.
 8. Chưa có refund/hoàn tiền tự động — chỉnh tay qua service_role (`adjustment`/`refund`).
+
+## T-19 — E2E checklist trên hạ tầng thật (chưa chạy)
+
+Điều kiện: tài khoản Supabase + merchant PayOS (CCCD/bank — xem Risks #1).
+
+1. `supabase link --project-ref <ref>` → `supabase db push` (apply 001+002).
+2. Đặt giá thật: UPDATE `pricing_rates` + `topup_packages` (đang PLACEHOLDER).
+3. `supabase secrets set OPENROUTER_API_KEY=... PAYOS_CLIENT_ID=... PAYOS_API_KEY=... PAYOS_CHECKSUM_KEY=...` (+ `PAYOS_RETURN_URL/CANCEL_URL` nếu muốn). Đặt hard spend-limit trên key OpenRouter (Risks #3).
+4. `supabase functions deploy llm-correct payos-order` và `supabase functions deploy payos-webhook --no-verify-jwt`; đăng ký URL webhook với PayOS.
+5. Tạo user qua Supabase Auth (dashboard/invite). Local `.env`: thêm `CLOUD_BILLING=on`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`; XÓA `OPENROUTER_API_KEY` cũ (app không còn đọc — cân nhắc rotate vì từng nằm trong file).
+6. App: đăng nhập → chọn backend Cloud → nạp gói nhỏ nhất qua QR → số dư cộng đúng; **replay webhook** (gửi lại payload cũ) → không cộng đôi.
+7. Upload file có thuật ngữ → transcript sửa qua cloud, chip `✦ x cr`, ledger trừ đúng token; live subtitle → câu được sửa, credit cộng dồn vào bản lưu.
+8. Xả gần hết ví → upload ra banner "Hết credit" + bản chưa sửa; live hiện hint đỏ + sub chạy raw; KHÔNG còn call OpenRouter sau 402 (check ledger).
+9. Đo latency câu live qua cloud (mục tiêu 3–8s/câu; region `sin1`).
+10. Tắt `CLOUD_BILLING` → app offline nguyên trạng (Ollama, không UI billing).
 
 ## Verification sau khi code xong
 

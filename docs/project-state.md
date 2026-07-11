@@ -6,7 +6,9 @@
 - **Next Step**: Chạy `/plan-feature` cho hạng mục kế tiếp của Đợt 1 (xem PRD ưu tiên), hoặc `/audit-plan` để soát tiến độ vs BRD/PRD.
 
 ## Active Feature
-**Ví credit — tính phí token cho LLM cloud** (PRD FR-6 / BRD YC-6, US-601..606). Status: **Plan Approved** — plan: [docs/plan-credit-wallet.md](plan-credit-wallet.md). Branch: `feat/credit-wallet`.
+**Ví credit — tính phí token cho LLM cloud** (PRD FR-6 / BRD YC-6, US-601..606). Status: **Implemented** (T-01..T-18,T-20 xong; T-19 E2E chờ Supabase project thật + PayOS merchant — checklist trong plan). Plan: [docs/plan-credit-wallet.md](plan-credit-wallet.md). Branch: `feat/credit-wallet` (9 commit, chưa merge main).
+
+Files mới: `supabase/migrations/002_billing.sql` (+ rollback + pgTAP), `supabase/functions/{_shared,llm-correct,payos-order,payos-webhook}/`, `supabase/config.toml` (port +10 — máy chạy nhiều project Supabase), `app/cloud.py`, `tests/test_cloud.py`. Sửa: `app/correct.py` (CorrectionResult, gỡ OpenRouter direct — key về server), `app/transcribe.py`, `app/db.py` (cột `credits_spent`), `app/live.py` (WS `credit_blocked`), `app/main.py` (auth + wallet endpoints), `app/static/` (UI billing), BRD v1.4, PRD v1.1, README.
 
 ## Features Backlog
 Nguồn: [PRD.md](../PRD.md) §2 (FR-1..). Điền chi tiết khi chạy `/plan-feature`.
@@ -25,8 +27,8 @@ Nguồn: [PRD.md](../PRD.md) §2 (FR-1..). Điền chi tiết khi chạy `/plan-
 | 2 - Product | Complete | 2026-07-09 | PRD.md (v1.0, Approved) |
 
 ## Session Resume
-Last updated: 2026-07-11
-Summary: /apply-framework chạy lại — không còn artifact `.framework.*`. Baseline audit + refactor hoàn tất (xem docs/tech-debt.md): hàm dài/nhiều params gom vào dataclass, CLAUDE.md 73/80 dòng (Layer 0 tách sang .claude/rules/project/routing-layer0.md), git init + checkpoint, 27 test + ruff + mypy xanh. Đợt 2 (org sync) đang dở — xem mục bên dưới.
+Last updated: 2026-07-11 (chiều)
+Summary: Build xong **FR-6 ví credit** trên branch `feat/credit-wallet`: Supabase billing schema (RLS + RPC atomic, pgTAP 18/18 trên local stack port 54331+), Edge Functions llm-correct/payos-order/payos-webhook (deno test 13/13), app local backend cloud (CorrectionResult, 402→blocked không fallback), UI ví/nạp/402. Gates: 42 pytest + ruff + mypy xanh. **Việc còn lại:** T-19 E2E thật (owner cần: Supabase project, PayOS merchant, đặt giá thật thay PLACEHOLDER, rotate OPENROUTER_API_KEY trong .env — app không còn đọc key này). Lưu ý kỹ thuật: image Postgres local segfault khi authenticated gọi hàm bị revoke → pgTAP dùng has_function_privilege; service_role phải được GRANT execute tường minh sau revoke PUBLIC.
 
 ### Trạng thái Đợt 1
 Kiểm tra 2026-07-11: **Đợt 1 hoàn chỉnh** — FR-1..FR-4 đều đã cài đặt (EngineRegistry, SQLite+migration, audio dir configurable, multi-session, wake lock, WS reconnect/resume+replay, PWA+OPFS). Code compile + import sạch.
