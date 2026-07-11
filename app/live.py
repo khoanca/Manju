@@ -22,8 +22,8 @@ import numpy as np
 from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from app import engines, transcribe
-from app.correct import LlmOpts, correct_sentence, openrouter_enabled
+from app import cloud, engines, transcribe
+from app.correct import LlmOpts, correct_sentence, llm_backend
 
 SAMPLE_RATE = 16000
 TICK_S = 1.2  # nhịp vòng decode
@@ -94,6 +94,8 @@ class LiveSession:
         self.sentences: dict[int, str] = {}  # bản chính (corrected ghi đè final)
         self.raw_sentences: dict[int, str] = {}
         self.utt_start: dict[int, float] = {}  # mốc bắt đầu mỗi câu (giây, tính từ đầu phiên)
+        self.credits_spent = 0.0  # credit pass 2 cloud cộng dồn cả phiên (FR-6)
+        self.credit_blocked = False  # 402 — ngừng gửi câu đi sửa (US-606)
 
     def _init_recording(self) -> None:
         # Ghi toàn bộ PCM ra file tạm ngay khi nhận (không đọng cả phiên trong
@@ -272,6 +274,7 @@ class LiveSession:
             self.raw_sentences[utt] = text
             if (
                 self.correct_enabled
+                and not self.credit_blocked  # hết credit → sub chạy raw (US-606)
                 and len(text) >= MIN_CORRECT_CHARS
                 and self.correction_q.qsize() < CORRECTION_BACKLOG_MAX
             ):
@@ -283,32 +286,50 @@ class LiveSession:
 
     # ── Thread pass 2: sửa thuật ngữ từng câu ─────────────────────────────
     def _correct_loop(self) -> None:
-        if not openrouter_enabled():
-            # Warm-up Ollama: load LLM vào RAM để câu đầu không phải chờ.
-            # (OpenRouter là API ngoài, không cần warm-up.)
-            correct_sentence("ping", LlmOpts(num_ctx=CORRECT_NUM_CTX, timeout=60.0))
+        self._warmup_llm()
         while True:
             item = self.correction_q.get()
             if item is None:
                 return
-            utt, text = item
-            # Vài câu ngay trước làm ngữ cảnh: Claude đoán thuật ngữ theo mạch
-            # cuộc họp ("can ban che quýt" → "kanban checklist").
-            prev = [self.sentences[k] for k in sorted(self.sentences) if k < utt]
-            context = " ".join(prev[-3:])
-            fixed, ok = correct_sentence(
-                text,
-                LlmOpts(
-                    glossary=self.glossary,
-                    context=context,
-                    num_ctx=CORRECT_NUM_CTX,
-                    timeout=CORRECT_TIMEOUT_S,
-                ),
-            )
-            changed = ok and fixed != text
-            if changed:
-                self.sentences[utt] = fixed
-            self._send({"type": "corrected", "utt": utt, "text": fixed, "changed": changed})
+            if self.credit_blocked:  # câu còn đọng trong queue sau 402 → bỏ
+                continue
+            self._correct_one(*item)
+
+    def _warmup_llm(self) -> None:
+        if llm_backend() == "cloud":
+            # Ping Edge Function né cold start cho câu đầu (region xa + boot).
+            try:
+                cloud.llm_correct({"ping": True}, timeout=10.0)
+            except Exception:  # noqa: BLE001 — warm-up fail thì câu đầu chịu chậm
+                pass
+        else:
+            # Warm-up Ollama: load LLM vào RAM để câu đầu không phải chờ.
+            correct_sentence("ping", LlmOpts(num_ctx=CORRECT_NUM_CTX, timeout=60.0))
+
+    def _correct_one(self, utt: int, text: str) -> None:
+        # Vài câu ngay trước làm ngữ cảnh: Claude đoán thuật ngữ theo mạch
+        # cuộc họp ("can ban che quýt" → "kanban checklist").
+        prev = [self.sentences[k] for k in sorted(self.sentences) if k < utt]
+        res = correct_sentence(
+            text,
+            LlmOpts(
+                glossary=self.glossary,
+                context=" ".join(prev[-3:]),
+                num_ctx=CORRECT_NUM_CTX,
+                timeout=CORRECT_TIMEOUT_S,
+            ),
+        )
+        if res.blocked:
+            # Báo MỘT lần rồi ngừng enqueue (guard trong _finalize) — không để
+            # mỗi câu ăn thêm một lượt 402 (US-606).
+            self.credit_blocked = True
+            self._send({"type": "credit_blocked", "balance": res.balance})
+            return
+        self.credits_spent += res.credits_spent
+        changed = res.ok and res.text != text
+        if changed:
+            self.sentences[utt] = res.text
+        self._send({"type": "corrected", "utt": utt, "text": res.text, "changed": changed})
 
     # ── Lưu transcript ────────────────────────────────────────────────────
     def _close_recording(self) -> bytes:
@@ -355,6 +376,7 @@ class LiveSession:
             raw_text=raw if raw != text else None,
             segments=segments,
             audio_path=wav_path,
+            credits_spent=self.credits_spent,
         ))
 
 

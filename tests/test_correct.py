@@ -44,8 +44,7 @@ def test_prompt_for_includes_glossary_and_context():
 
 
 def test_llm_model_name_follows_backend(monkeypatch):
-    monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(correct, "llm_backend", lambda: "ollama")
     assert correct.llm_model_name() == correct.OLLAMA_MODEL
-    monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "sk-test")
-    assert correct.openrouter_enabled() is True
-    assert correct.llm_model_name() == correct.OPENROUTER_MODEL
+    monkeypatch.setattr(correct, "llm_backend", lambda: "cloud")
+    assert correct.llm_model_name() == correct.CLOUD_LLM_MODEL

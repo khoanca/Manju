@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   corrected  INTEGER DEFAULT 0,
   llm_model  TEXT,
   audio_file TEXT,
-  audio_dir  TEXT
+  audio_dir  TEXT,
+  credits_spent REAL
 );
 CREATE INDEX IF NOT EXISTS idx_t_created ON transcripts(created_at DESC);
 
@@ -61,6 +62,15 @@ def _connect() -> sqlite3.Connection:
 def init() -> None:
     with _connect() as conn:
         conn.executescript(_SCHEMA)
+        _ensure_columns(conn)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Migration additive cho DB đã tồn tại: CREATE TABLE IF NOT EXISTS không
+    thêm cột mới vào bảng cũ → tự ALTER khi thiếu (idempotent)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(transcripts)")}
+    if "credits_spent" not in cols:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN credits_spent REAL")
 
 
 # ── Transcripts ────────────────────────────────────────────────────────────
@@ -80,6 +90,7 @@ class TranscriptRecord:
     llm_model: str | None
     audio_file: str | None
     audio_dir: str | None
+    credits_spent: float = 0.0  # credit đã tốn cho pass 2 cloud (FR-6)
 
 
 def insert_transcript(rec: TranscriptRecord) -> None:
@@ -87,14 +98,16 @@ def insert_transcript(rec: TranscriptRecord) -> None:
         conn.execute(
             """INSERT OR REPLACE INTO transcripts
                (id, title, language, model, duration, created_at, text, raw_text,
-                segments, chars, words, corrected, llm_model, audio_file, audio_dir)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                segments, chars, words, corrected, llm_model, audio_file, audio_dir,
+                credits_spent)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 rec.transcript_id, rec.title, rec.language, rec.model,
                 round(rec.duration, 1), rec.created_at, rec.text, rec.raw_text,
                 json.dumps(rec.segments, ensure_ascii=False) if rec.segments else None,
                 len(rec.text), len(rec.text.split()), int(rec.raw_text is not None),
                 rec.llm_model, rec.audio_file, rec.audio_dir,
+                rec.credits_spent or None,
             ),
         )
 
@@ -112,6 +125,7 @@ def _meta(row: sqlite3.Row) -> dict:
         "words": row["words"],
         "corrected": bool(row["corrected"]),
         "llm_model": row["llm_model"],
+        "credits_spent": row["credits_spent"],
         "has_segments": row["segments"] is not None,
         "audio": row["audio_file"],
     }
@@ -121,8 +135,8 @@ def list_transcripts() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             """SELECT t.id, t.title, t.language, t.model, t.duration, t.created_at,
-                      t.chars, t.words, t.corrected, t.llm_model, t.segments,
-                      t.audio_file, s.status AS sync_status
+                      t.chars, t.words, t.corrected, t.llm_model, t.credits_spent,
+                      t.segments, t.audio_file, s.status AS sync_status
                FROM transcripts t
                LEFT JOIN sync_state s ON s.transcript_id = t.id
                ORDER BY t.created_at DESC"""

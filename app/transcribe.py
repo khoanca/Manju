@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app import db, engines
-from app.correct import correct_text, llm_model_name
+from app.correct import CorrectionResult, correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +51,7 @@ class TranscriptDraft:
     raw_text: str | None = None
     segments: list[dict] | None = None
     audio_path: Path | None = None
+    credits_spent: float = 0.0  # credit pass 2 cloud đã tốn (FR-6)
 
 
 # ── Quản lý job (in-memory) ───────────────────────────────────────────────
@@ -67,6 +68,8 @@ def _new_job() -> str:
             "progress": 0.0,
             "error": None,
             "transcript_id": None,
+            "correction_blocked": False,  # 402 hết credit — UI hiện banner (US-606)
+            "credits_spent": 0.0,
         }
     return job_id
 
@@ -125,25 +128,30 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         engines.DecodeSpec(spec.language, spec.prompt, override),
         lambda text, p: _update(job_id, text=text, progress=p),
     )
-    full_text, corrected = _maybe_correct(job_id, result.text, spec)
+    res = _maybe_correct(job_id, result.text, spec)
     transcript_id = save_transcript(TranscriptDraft(
         original_name=spec.filename,
         language=spec.language,
         duration=result.duration,
-        text=full_text,
+        text=res.text,
         model_name=override or engine.info.model_name,
-        raw_text=result.text if corrected and full_text != result.text else None,
+        # Sửa dở vì hết credit (blocked) vẫn giữ raw để đối chiếu.
+        raw_text=result.text if res.text != result.text else None,
         segments=result.segments or None,
         # Giữ lại file upload gốc để nghe/tải lại (save_transcript sẽ dời đi).
         audio_path=audio_path,
+        credits_spent=res.credits_spent,
     ))
-    _update(job_id, status="done", text=full_text, progress=1.0, transcript_id=transcript_id)
+    _update(
+        job_id, status="done", text=res.text, progress=1.0, transcript_id=transcript_id,
+        correction_blocked=res.blocked, credits_spent=res.credits_spent,
+    )
 
 
-def _maybe_correct(job_id: str, text: str, spec: JobSpec) -> tuple[str, bool]:
+def _maybe_correct(job_id: str, text: str, spec: JobSpec) -> CorrectionResult:
     """Pass 2: LLM soát lại thuật ngữ tiếng Anh bị phiên âm sai."""
     if not (spec.correct and text):
-        return text, False
+        return CorrectionResult(text=text, ok=False)
     _update(job_id, status="correcting", progress=0.0)
     return correct_text(
         text, glossary=spec.prompt, on_progress=lambda p: _update(job_id, progress=p)
@@ -185,6 +193,7 @@ def save_transcript(draft: TranscriptDraft) -> str:
         llm_model=llm_model_name() if draft.raw_text is not None else None,
         audio_file=audio_name,
         audio_dir=str(audio_dir) if audio_name else None,
+        credits_spent=draft.credits_spent,
     ))
     return transcript_id
 

@@ -41,6 +41,14 @@ class CloudAuthError(CloudError):
     """Chưa đăng nhập / refresh token hết hiệu lực."""
 
 
+class InsufficientCredits(CloudError):
+    """402 — ví hết credit; tính năng trả phí bị chặn (US-606)."""
+
+    def __init__(self, balance: float):
+        super().__init__("Ví hết credit")
+        self.balance = balance  # đơn vị credit (đã chia 1000 từ wire)
+
+
 _lock = threading.Lock()
 _state: dict = {"access_token": "", "expires_at": 0.0, "user_id": ""}
 
@@ -157,6 +165,32 @@ def get_order(order_id: str) -> dict | None:
         f"topup_orders?id=eq.{order_id}&select=id,status,amount_vnd,credits,paid_at"
     )
     return rows[0] if rows else None
+
+
+def llm_correct(payload: dict, timeout: float) -> dict:
+    """Gọi Edge Function llm-correct (payload {text, glossary, context, requestId}
+    hoặc {ping: true}). Raise InsufficientCredits khi 402; CloudError khi khác."""
+    try:
+        resp = httpx.post(
+            f"{SUPABASE_URL}/functions/v1/llm-correct",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {access_token()}",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise CloudError(f"Không kết nối được cloud: {exc}") from exc
+    if resp.status_code == 402:
+        try:
+            balance = float(resp.json().get("balanceCredits", 0)) / 1000
+        except Exception:  # noqa: BLE001
+            balance = 0.0
+        raise InsufficientCredits(balance)
+    if resp.status_code >= 400:
+        raise CloudError(f"llm-correct lỗi (HTTP {resp.status_code}): {resp.text[:200]}")
+    return resp.json()
 
 
 def create_topup(package_code: str) -> dict:
