@@ -84,6 +84,7 @@ def api_job(job_id: str):
 
 class SettingsIn(BaseModel):
     audio_dir: str | None = None
+    llm_backend: str | None = None  # 'ollama' | 'cloud' (FR-6)
 
 
 @app.get("/api/settings")
@@ -93,6 +94,9 @@ def api_settings():
         "audio_dir": str(db.get_audio_dir()),
         "engine": {"tier": info.tier, "model": info.model_name},
         "max_live_sessions": live.MAX_LIVE_SESSIONS,
+        "cloud_billing": cloud.cloud_billing_enabled(),
+        "llm_backend": db.get_setting("llm_backend", "ollama"),
+        "session": cloud.session_info(),  # {email} hoặc None
     }
 
 
@@ -103,7 +107,14 @@ def api_settings_put(body: SettingsIn):
             db.set_audio_dir(body.audio_dir)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-    return {"audio_dir": str(db.get_audio_dir())}
+    if body.llm_backend is not None:
+        if body.llm_backend not in ("ollama", "cloud"):
+            raise HTTPException(400, "llm_backend phải là 'ollama' hoặc 'cloud'")
+        db.set_setting("llm_backend", body.llm_backend)
+    return {
+        "audio_dir": str(db.get_audio_dir()),
+        "llm_backend": db.get_setting("llm_backend", "ollama"),
+    }
 
 
 @app.get("/api/transcripts")
@@ -191,3 +202,46 @@ def api_logout():
 def api_session():
     _require_cloud()
     return cloud.session_info() or {"email": None}
+
+
+# ── FR-6: ví credit — đọc số dư, gói nạp, tạo đơn PayOS, poll trạng thái ────
+def _cloud_call(fn):  # noqa: ANN001, ANN202 — helper map lỗi cloud → HTTP
+    try:
+        return fn()
+    except cloud.CloudAuthError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    except cloud.CloudNotConfigured as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except cloud.CloudError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/api/wallet")
+def api_wallet():
+    _require_cloud()
+    return _cloud_call(cloud.get_wallet)
+
+
+@app.get("/api/wallet/packages")
+def api_wallet_packages():
+    _require_cloud()
+    return _cloud_call(cloud.get_packages)
+
+
+class TopupIn(BaseModel):
+    package_code: str
+
+
+@app.post("/api/wallet/topup")
+def api_wallet_topup(body: TopupIn):
+    _require_cloud()
+    return _cloud_call(lambda: cloud.create_topup(body.package_code))
+
+
+@app.get("/api/wallet/topup/{order_id}")
+def api_wallet_topup_status(order_id: str):
+    _require_cloud()
+    order = _cloud_call(lambda: cloud.get_order(order_id))
+    if order is None:
+        raise HTTPException(404, "Không tìm thấy đơn nạp")
+    return order
