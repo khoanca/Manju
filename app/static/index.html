@@ -386,6 +386,8 @@
       <button class="btn-stop" id="recStop">■ Stop</button>
     </div>
     <div class="rec-hint" id="recHint">Bấm Stop để kết thúc — văn bản &amp; file ghi âm tự lưu.</div>
+    <!-- US-606: hết credit giữa phiên live — sub vẫn chạy bản gốc -->
+    <div class="rec-hint hidden" id="creditHint" style="color:#dc2626;font-weight:600"></div>
   </section>
 
   <!-- ══════ SETTINGS ══════ -->
@@ -432,6 +434,49 @@
     <div class="set-card"><div class="set-row" style="display:block">
       <textarea id="prompt" placeholder="deploy, API, sprint, staging, tên người, tên dự án…"></textarea>
     </div></div>
+
+    <!-- FR-6: chỉ hiện khi server bật CLOUD_BILLING -->
+    <div id="cloudSection" class="hidden">
+      <div class="sec-label">Tài khoản &amp; Credit</div>
+      <div class="set-card">
+        <div class="set-row" id="loginRow" style="display:block">
+          <div class="set-main" style="margin-bottom:8px">
+            <b>Đăng nhập cloud</b>
+            <small>Sửa thuật ngữ chất lượng cao qua cloud (trả credit) · <span id="loginMsg"></span></small>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px">
+            <input id="authEmail" type="email" placeholder="email@example.com" style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px" />
+            <input id="authPass" type="password" placeholder="Mật khẩu" style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px" />
+            <button class="mini pri" id="btnLogin">Đăng nhập</button>
+          </div>
+        </div>
+        <div class="set-row hidden" id="sessionRow">
+          <div class="set-ico">👤</div>
+          <div class="set-main"><b id="sessEmail">—</b><small>Đã đăng nhập cloud</small></div>
+          <button class="mini" id="btnLogout">Đăng xuất</button>
+        </div>
+        <div class="set-row">
+          <div class="set-ico">🧠</div>
+          <div class="set-main"><b>Backend sửa thuật ngữ</b><small>Local miễn phí · Cloud trả credit (cần đăng nhập)</small></div>
+          <select id="llmBackend">
+            <option value="ollama">Local (miễn phí)</option>
+            <option value="cloud">Cloud (credit)</option>
+          </select>
+        </div>
+        <div class="set-row hidden" id="walletRow" style="display:block">
+          <div class="set-main" style="margin-bottom:8px">
+            <b>Ví credit: <span id="walletBal">—</span></b>
+            <small id="walletMsg">Chọn gói để nạp qua QR ngân hàng (PayOS)</small>
+          </div>
+          <div id="pkgList" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+          <div id="topupBox" class="hidden" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <a id="topupLink" class="mini pri" target="_blank" rel="noopener">Mở trang thanh toán QR</a>
+            <span id="topupStatus" style="font-size:12.5px;color:var(--muted)"></span>
+          </div>
+          <div id="ledger" style="margin-top:10px;font-size:12.5px;color:var(--muted);line-height:1.8"></div>
+        </div>
+      </div>
+    </div>
 
     <div class="sec-label">Chung</div>
     <div class="set-card">
@@ -484,8 +529,15 @@
       <button class="round-btn" data-back>‹</button>
       <span class="title" id="detTitle">Bản ghi</span>
     </div>
+    <!-- US-606: transcript ra bản chưa sửa (hết credit) -->
+    <div class="hidden" id="blockedBanner"
+         style="background:#fef2f2;color:#b91c1c;border-radius:14px;padding:12px 14px;margin-bottom:12px;font-size:13.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span>⚠️ Hết credit — bản này chưa được sửa thuật ngữ đầy đủ.</span>
+      <button class="mini" id="goTopup" style="background:#b91c1c;color:#fff">Nạp credit</button>
+    </div>
     <div class="det-card">
       <div class="det-actions">
+        <span class="chip ai hidden" id="detCost" style="align-self:center"></span>
         <button class="mini" id="toggleSegs" style="display:none">Mốc thời gian</button>
         <button class="mini" id="toggleRaw" style="display:none">Bản gốc</button>
         <button class="mini" id="copy">Copy</button>

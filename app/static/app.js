@@ -41,12 +41,16 @@ $("swLocalAudio").onclick = () => {
   saveSettings();
 };
 
-// ── Settings phía server (engine, thư mục audio) ───────────────────────────
+// ── Settings phía server (engine, thư mục audio, cloud billing FR-6) ───────
 async function loadServerSettings(){
   try {
     const s = await (await fetch("/api/settings")).json();
     $("engineVal").textContent = s.engine.model;
     $("audioDir").value = s.audio_dir;
+    CLOUD.enabled = !!s.cloud_billing;
+    CLOUD.session = s.session || null;
+    CLOUD.backend = s.llm_backend || "ollama";
+    renderCloud();
   } catch { $("engineVal").textContent = "—"; }
 }
 $("saveAudioDir").onclick = async () => {
@@ -63,6 +67,135 @@ $("saveAudioDir").onclick = async () => {
   } catch (e) { msg.textContent = e.message; msg.style.color = "#dc2626"; }
   setTimeout(() => { msg.textContent = ""; }, 5000);
 };
+
+// ── FR-6: tài khoản cloud + ví credit ──────────────────────────────────────
+const CLOUD = { enabled:false, session:null, backend:"ollama" };
+// DB lưu credit đơn vị "credit"; API ví trả milli-credit (×1000).
+const fmtCr = (c) => (Math.round((c||0)*100)/100).toLocaleString("en-US") + " cr";
+const fmtCrMilli = (m) => fmtCr((m||0)/1000);
+
+function renderCloud(){
+  $("cloudSection").classList.toggle("hidden", !CLOUD.enabled);
+  if (!CLOUD.enabled) return;
+  const logged = !!CLOUD.session;
+  $("loginRow").classList.toggle("hidden", logged);
+  $("sessionRow").classList.toggle("hidden", !logged);
+  $("walletRow").classList.toggle("hidden", !logged);
+  if (logged) $("sessEmail").textContent = CLOUD.session.email || "—";
+  $("llmBackend").value = CLOUD.backend;
+  if (logged) loadWallet();
+}
+
+$("btnLogin").onclick = async () => {
+  const msg = $("loginMsg");
+  msg.textContent = "Đang đăng nhập…";
+  try {
+    const r = await fetch("/api/auth/login", {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ email: $("authEmail").value.trim(), password: $("authPass").value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    CLOUD.session = { email: d.email };
+    $("authPass").value = ""; msg.textContent = "";
+    renderCloud();
+  } catch (e) { msg.textContent = e.message; }
+};
+
+$("btnLogout").onclick = async () => {
+  try { await fetch("/api/auth/logout", { method:"POST" }); } catch {}
+  CLOUD.session = null;
+  if (CLOUD.backend === "cloud") setBackend("ollama"); // hết session thì về local
+  renderCloud();
+};
+
+$("llmBackend").onchange = () => {
+  const v = $("llmBackend").value;
+  if (v === "cloud" && !CLOUD.session){
+    $("llmBackend").value = CLOUD.backend;
+    $("loginMsg").textContent = "Đăng nhập trước khi chọn Cloud.";
+    return;
+  }
+  setBackend(v);
+};
+async function setBackend(v){
+  try {
+    const r = await fetch("/api/settings", {
+      method:"PUT", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ llm_backend: v }),
+    });
+    if (r.ok) CLOUD.backend = v;
+  } catch {}
+  $("llmBackend").value = CLOUD.backend;
+}
+
+async function loadWallet(){
+  try {
+    const w = await (await fetch("/api/wallet")).json();
+    $("walletBal").textContent = fmtCrMilli(w.balance_credits);
+    $("ledger").innerHTML = (w.ledger || []).map(l => {
+      const sign = l.delta_credits >= 0 ? "+" : "−";
+      const label = { llm_correct:"Sửa thuật ngữ", topup:"Nạp credit", adjustment:"Điều chỉnh", refund:"Hoàn credit" }[l.reason] || l.reason;
+      return `<div>${label} · ${sign}${fmtCrMilli(Math.abs(l.delta_credits))} · ${fmtDate(l.created_at)}</div>`;
+    }).join("");
+    loadPackages();
+  } catch { $("walletBal").textContent = "—"; }
+}
+
+async function loadPackages(){
+  const box = $("pkgList");
+  if (box.childElementCount) return; // gói ít thay đổi — nạp một lần
+  try {
+    const pkgs = await (await fetch("/api/wallet/packages")).json();
+    box.innerHTML = "";
+    for (const p of pkgs){
+      const b = document.createElement("button");
+      b.className = "mini";
+      b.textContent = `${nfmt(p.amount_vnd)}đ → ${fmtCrMilli(p.credits)}`;
+      b.onclick = () => startTopup(p.code);
+      box.appendChild(b);
+    }
+  } catch {}
+}
+
+// US-604: tạo đơn PayOS → mở checkout QR → poll đơn tới khi paid (timeout 10').
+let topupTimer = null;
+async function startTopup(code){
+  const st = $("topupStatus");
+  clearTimeout(topupTimer);
+  st.textContent = "Đang tạo đơn…";
+  $("topupBox").classList.remove("hidden");
+  try {
+    const r = await fetch("/api/wallet/topup", {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ package_code: code }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    $("topupLink").href = d.checkoutUrl;
+    window.open(d.checkoutUrl, "_blank", "noopener");
+    st.textContent = "Chờ thanh toán…";
+    pollTopup(d.orderId, Date.now() + 10*60*1000);
+  } catch (e) { st.textContent = "Lỗi: " + e.message; }
+}
+function pollTopup(orderId, deadline){
+  topupTimer = setTimeout(async () => {
+    const st = $("topupStatus");
+    try {
+      const o = await (await fetch("/api/wallet/topup/" + orderId)).json();
+      if (o.status === "paid"){
+        st.textContent = "Đã nạp thành công ✓";
+        $("topupBox").classList.add("hidden");
+        loadWallet();
+        return;
+      }
+      if (o.status === "failed" || o.status === "expired"){ st.textContent = "Đơn " + o.status + " — thử lại."; return; }
+    } catch {}
+    if (Date.now() > deadline){ st.textContent = "Chưa thấy thanh toán — kiểm tra lại sau trong Cài đặt."; return; }
+    pollTopup(orderId, deadline);
+  }, 3000);
+}
+$("goTopup").onclick = () => { showScreen("settings"); };
 
 // ── Screen router ──────────────────────────────────────────────────────────
 const SCREENS = ["home","record","settings","upload","detail"];
@@ -118,7 +251,7 @@ function renderHistory(){
     li.className = "rec-card";
     const words = m.words != null ? m.words : Math.round((m.chars||0)/5);
     const chips = (m.audio ? `<span class="chip audio">🔊 Audio</span>` : (opfs[m.id] ? `<span class="chip audio">📱 Audio</span>` : ""))
-                + (m.corrected ? `<span class="chip ai">✦ AI</span>` : "");
+                + (m.corrected ? `<span class="chip ai">✦ AI${m.credits_spent ? " · " + fmtCr(m.credits_spent) : ""}</span>` : "");
     li.innerHTML = `
       <div class="rec-top">
         <div class="avatar"><i style="height:9px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:14px"></i><i style="height:8px"></i></div>
@@ -211,13 +344,19 @@ function setResult(text, raw, segments, id, hasServerAudio){
   renderSegments(segments);
   showAudio(id, hasServerAudio);
 }
-async function openDetail(m){
+async function openDetail(m, blocked = false){
   showScreen("detail");
   $("detTitle").textContent = m.title || "Bản ghi";
+  $("blockedBanner").classList.toggle("hidden", !blocked); // US-606
+  $("detCost").classList.add("hidden");
   downloadName = (m.title || m.id).replace(/\.[^.]+$/, "") + ".txt";
   setResult("Đang tải…", null, null, null, false);
   const d = await (await fetch("/api/transcripts/" + m.id)).json();
   setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio);
+  if (d.credits_spent){
+    $("detCost").textContent = "✦ " + fmtCr(d.credits_spent);
+    $("detCost").classList.remove("hidden");
+  }
 }
 $("toggleRaw").onclick = () => { showingRaw = !showingRaw; $("result").value = showingRaw ? rawText : fixedText; $("toggleRaw").textContent = showingRaw ? "Bản sửa" : "Bản gốc"; };
 function renderSegments(segments){
@@ -264,9 +403,10 @@ function poll(jobId){
     const j = await (await fetch("/api/jobs/" + jobId)).json();
     setStatus(label(j.status), j.progress);
     if (j.status === "done"){
-      go.disabled = false; chosen = null; $("fileName").textContent = ""; setStatus("Xong ✅", 1);
+      go.disabled = false; chosen = null; $("fileName").textContent = "";
+      setStatus(j.correction_blocked ? "Xong — hết credit, chưa sửa thuật ngữ ⚠️" : "Xong ✅", 1);
       await loadHistory();
-      if (j.transcript_id){ const m = ALL.find(x => x.id === j.transcript_id) || {id:j.transcript_id, title:downloadName}; openDetail(m); }
+      if (j.transcript_id){ const m = ALL.find(x => x.id === j.transcript_id) || {id:j.transcript_id, title:downloadName}; openDetail(m, !!j.correction_blocked); }
       return;
     }
     if (j.status === "error"){ setStatus("Lỗi: " + j.error, 0); go.disabled = false; return; }
@@ -405,6 +545,7 @@ async function startLive(){
            stopping:false, deadline:null, paused:false, base:0, resumeAt:Date.now(),
            timer:setInterval(tickTimer,300) };
   subs.innerHTML = ""; recTimer.textContent = "00:00:00";
+  $("creditHint").classList.add("hidden");
   setPill("KẾT NỐI…", true); setWave("on");
   $("recPause").textContent = "❚❚ Pause";
   recHint.textContent = useOpfs
@@ -430,6 +571,11 @@ function handleLiveMsg(m){
     stopTypewriter(m.utt); const el = subEl(m.utt);
     if (!m.text){ el.remove(); return; }
     el.textContent = m.text; el.classList.remove("partial"); autoscroll();
+  } else if (m.type === "credit_blocked"){
+    // US-606: server báo MỘT lần — sub tiếp tục bản gốc, không sửa nữa.
+    const el = $("creditHint");
+    el.textContent = "⚠️ Hết credit — sửa thuật ngữ tạm dừng, subtitle chạy bản gốc. Nạp thêm trong Cài đặt.";
+    el.classList.remove("hidden");
   } else if (m.type === "corrected"){
     if (!m.changed) return;
     const el = subs.querySelector(`[data-utt="${m.utt}"]`);
