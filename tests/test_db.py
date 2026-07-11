@@ -32,6 +32,36 @@ def _insert(tid="20260101-000000-hop", corrected=False):
     ))
 
 
+def test_init_twice_is_idempotent_and_adds_credits_column(tmp_db):
+    db.init()  # lần 2 — ALTER guarded qua PRAGMA không được nổ (FR-6)
+    _insert()
+    row = db.read_transcript("20260101-000000-hop")
+    assert row is not None
+    assert row["credits_spent"] is None  # không dùng cloud → NULL
+
+
+def test_credits_spent_roundtrip(tmp_db):
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="20260101-000001-cloud",
+        title="Họp cloud",
+        language="vi",
+        model="large-v3-turbo",
+        duration=10.0,
+        created_at="2026-01-01T00:00:01+07:00",
+        text="deploy Kubernetes",
+        raw_text="đíp lôi cu bơ nét",
+        segments=None,
+        llm_model="anthropic/claude-haiku-4.5",
+        audio_file=None,
+        audio_dir=None,
+        credits_spent=1.25,
+    ))
+    row = db.read_transcript("20260101-000001-cloud")
+    assert row is not None and row["credits_spent"] == 1.25
+    listed = next(m for m in db.list_transcripts() if m["id"] == "20260101-000001-cloud")
+    assert listed["credits_spent"] == 1.25
+
+
 def test_insert_read_roundtrip(tmp_db):
     _insert(corrected=True)
     row = db.read_transcript("20260101-000000-hop")
