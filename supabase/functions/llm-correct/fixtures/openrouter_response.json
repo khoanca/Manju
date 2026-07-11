@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "Anh em deploy service lên Kubernetes trước buổi demo nhé."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 45
+  }
+}

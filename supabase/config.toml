@@ -1,0 +1,13 @@
+# Cấu hình Supabase CLI (local stack + deploy). Các section vắng mặt dùng default.
+project_id = "manju"
+
+# llm-correct / payos-order: platform verify JWT user trước khi vào function.
+# payos-webhook: PayOS gọi vào, không có JWT — tự verify chữ ký HMAC trong code.
+[functions.llm-correct]
+verify_jwt = true
+
+[functions.payos-order]
+verify_jwt = true
+
+[functions.payos-webhook]
+verify_jwt = false

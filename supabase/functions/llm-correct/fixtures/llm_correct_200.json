@@ -1,0 +1,11 @@
+{
+  "text": "Anh em deploy service lên Kubernetes trước buổi demo nhé.",
+  "usage": {
+    "promptTokens": 120,
+    "completionTokens": 45
+  },
+  "credits": {
+    "spentCredits": 345,
+    "balanceCredits": 9655
+  }
+}
