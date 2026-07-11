@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import db, engines, live, org, transcribe
+from app import cloud, db, engines, live, org, transcribe
 
 
 @asynccontextmanager
@@ -156,3 +156,38 @@ def api_push(transcript_id: str, body: PushIn):
 @app.get("/api/transcripts/{transcript_id}/sync")
 def api_sync_state(transcript_id: str):
     return db.get_sync_state(transcript_id) or {"status": "pending"}
+
+
+# ── FR-6: tài khoản cloud (đăng nhập Supabase Auth cho ví credit) ───────────
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+def _require_cloud() -> None:
+    if not cloud.cloud_billing_enabled():
+        raise HTTPException(503, "CLOUD_BILLING đang tắt hoặc chưa cấu hình Supabase")
+
+
+@app.post("/api/auth/login")
+def api_login(body: LoginIn):
+    _require_cloud()
+    try:
+        return cloud.login(body.email, body.password)
+    except cloud.CloudAuthError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    except cloud.CloudError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/auth/logout")
+def api_logout():
+    _require_cloud()
+    cloud.logout()
+    return {"status": "logged_out"}
+
+
+@app.get("/api/auth/session")
+def api_session():
+    _require_cloud()
+    return cloud.session_info() or {"email": None}
