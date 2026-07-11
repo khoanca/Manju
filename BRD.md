@@ -1,6 +1,6 @@
 # BRD – App Transcribe cuộc họp
 
-**Phiên bản:** 1.3 · **Ngày:** 2026-07-09 · **Trạng thái:** Draft
+**Phiên bản:** 1.4 · **Ngày:** 2026-07-11 · **Trạng thái:** Draft
 **Tài liệu liên quan:** [PRD.md](PRD.md) — spec chi tiết mô hình local-first + tổ chức, phân đợt build.
 
 ## 1. Mục đích
@@ -36,8 +36,17 @@ App chạy **local** (riêng tư, miễn phí) để chuyển đoạn ghi âm cu
 - **Dữ liệu local-first:** audio + text của mỗi người nằm trên máy người đó (text trong database local, audio trong thư mục user tự chọn được).
 - **Tổ chức:** mỗi người một tài khoản riêng, admin tổ chức invite; user chọn từng bản transcript để đẩy **text** (không audio) lên database online của tổ chức; admin thấy tất cả và cấp quyền xem cho từng người. Chi tiết: PRD FR-5.
 
+### YC-6 — Tính phí token: ví credit cho LLM cloud
+- Transcribe (pass 1) và pass 2 qua **Ollama local luôn miễn phí** — "miễn phí" ở mục 1 vẫn đúng cho toàn bộ đường local. Tính phí chỉ áp dụng khi user chọn **sửa thuật ngữ qua LLM cloud** (chất lượng cao hơn, không cần cài Ollama).
+- Hai hành động trả phí: **(a)** pass 2 cho bản upload/ghi âm, **(b)** sửa từng câu trong live subtitle — khi backend LLM là cloud.
+- **Ví credit** của mỗi tài khoản nằm server-side (Supabase — dùng chung tài khoản YC-5); đơn vị là **credit trừu tượng**, giá bán (markup trên chi phí LLM) do chủ hệ thống đặt trong bảng giá. Mỗi lần gọi trừ credit theo token thực tế mà LLM báo về.
+- **Voice/audio không bao giờ rời máy user** — chỉ đoạn text cần sửa được gửi lên. API key LLM nằm ở server, không phát cho user.
+- **Hết credit → chặn hẳn tính năng trả phí** (không âm thầm chuyển backend), hiện thông báo + lời mời nạp; transcript vẫn ra bản chưa sửa. Ollama local vẫn dùng được bình thường.
+- **Nạp credit:** chọn gói → thanh toán QR ngân hàng (PayOS) → hệ thống tự cộng ví khi nhận webhook xác nhận (idempotent — webhook trùng không cộng đôi).
+- Lịch sử giao dịch (nạp/trừ) xem được trong app; mỗi transcript hiển thị số credit đã tốn.
+
 ## 3. Ngoài phạm vi (chưa làm)
-Tách người nói (đã có lộ trình — mục 4 Phase 2) · dịch · tóm tắt tự động · sync 2 chiều/sửa đồng thời · sync audio lên tổ chức.
+Tách người nói (đã có lộ trình — mục 4 Phase 2) · dịch · tóm tắt tự động · sync 2 chiều/sửa đồng thời · sync audio lên tổ chức · hoàn tiền/refund tự động và hóa đơn VAT (điều chỉnh ví thủ công qua admin).
 
 ## 4. Lộ trình nâng cấp: ASR native macOS + phân biệt người nói
 

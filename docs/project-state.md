@@ -6,7 +6,7 @@
 - **Next Step**: Chạy `/plan-feature` cho hạng mục kế tiếp của Đợt 1 (xem PRD ưu tiên), hoặc `/audit-plan` để soát tiến độ vs BRD/PRD.
 
 ## Active Feature
-Đang build **Đợt 1** theo [PRD.md](../PRD.md). Chưa có plan-feature nào được tạo qua framework.
+**Ví credit — tính phí token cho LLM cloud** (PRD FR-6 / BRD YC-6, US-601..606). Status: **Plan Approved** — plan: [docs/plan-credit-wallet.md](plan-credit-wallet.md). Branch: `feat/credit-wallet`.
 
 ## Features Backlog
 Nguồn: [PRD.md](../PRD.md) §2 (FR-1..). Điền chi tiết khi chạy `/plan-feature`.

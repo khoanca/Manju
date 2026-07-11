@@ -1,6 +1,6 @@
 # PRD – Manju: Meeting Transcriber local-first + tổ chức
 
-**Phiên bản:** 1.0 · **Ngày:** 2026-07-09 · **Trạng thái:** Approved (đang build Đợt 1)
+**Phiên bản:** 1.1 · **Ngày:** 2026-07-11 · **Trạng thái:** Approved (Đợt 1 xong; Đợt 2 + FR-6 đang build)
 **Tài liệu liên quan:** [BRD.md](BRD.md) (yêu cầu nghiệp vụ gốc — transcribe, pass 2, live)
 
 ## 1. Tổng quan mô hình
@@ -56,14 +56,31 @@ Hệ thống theo mô hình **local-first + org sync**:
 
 - Thực thi quyền bằng RLS ngay trong Postgres (không tin client).
 
+### FR-6 — Ví credit & LLM proxy (BRD YC-6)
+
+Backend LLM pass 2 có 2 lựa chọn trong Settings: **Local (Ollama, miễn phí)** và **Cloud (trả credit)**. Backend cloud gọi Supabase Edge Function `llm-correct` kèm JWT user; function kiểm tra số dư → gọi LLM bằng key server → trừ credit atomic theo `usage` thực tế → trả text đã sửa. Toàn bộ tính năng gate sau env `CLOUD_BILLING` (mặc định off → app offline nguyên trạng).
+
+User stories:
+
+- **US-601 — Đăng nhập:** là user, tôi đăng nhập/đăng xuất tài khoản (Supabase Auth — cùng tài khoản FR-5) ngay trong Settings để dùng tính năng cloud. Session giữ qua các lần mở app (refresh token lưu local).
+- **US-602 — Chọn backend LLM:** là user, tôi chọn backend pass 2 (Local/Cloud) trong Settings; chưa đăng nhập hoặc `CLOUD_BILLING` off thì chỉ có Local.
+- **US-603 — Xem ví:** là user, tôi xem số dư credit và lịch sử giao dịch gần nhất (nạp/trừ, model, token) trong Settings.
+- **US-604 — Nạp credit:** là user, tôi chọn gói nạp (bảng `topup_packages`), thanh toán QR PayOS; ví tự cộng khi webhook xác nhận. AC: webhook trùng lặp không cộng đôi (idempotent theo `provider_order_code`); đơn quá 10 phút chưa trả → hiện "kiểm tra lại sau".
+- **US-605 — Trừ credit theo usage thật:** mỗi call cloud trừ credit = token in/out × đơn giá `pricing_rates` (markup nướng sẵn). AC: trừ atomic race-safe, không âm ví (clamp 0), retry cùng `request_id` không trừ đôi; mỗi transcript hiển thị tổng credit đã tốn; ledger ghi model + token.
+- **US-606 — Hết credit bị chặn:** khi 402, tính năng trả phí bị chặn hẳn — upload ra bản chưa sửa + banner "Hết credit" + CTA nạp; live ngừng gửi câu đi sửa (sub vẫn chạy raw) + pill thông báo. Không âm thầm fallback sang Ollama.
+
+Ma trận trách nhiệm: số dư/ledger/giá chỉ đọc từ client (RLS); mọi mutation qua RPC SECURITY DEFINER do Edge Function (service_role) gọi. Chi tiết kỹ thuật: [docs/plan-credit-wallet.md](docs/plan-credit-wallet.md).
+
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).
 - Sync audio lên org.
 - Realtime collab, comment, tóm tắt tự động.
 - Dịch ngôn ngữ.
+- Hoàn tiền/refund tự động, hóa đơn VAT (điều chỉnh ví thủ công qua service_role — ledger reason `adjustment`/`refund`).
 
 ## 4. Phân đợt
 
 - **Đợt 1 — nền local (đang build):** EngineRegistry; SQLite + migration; thư mục audio configurable; multi-session; tách JS + lưu settings; wake lock; WS reconnect/resume; PWA + OPFS.
 - **Đợt 2 — org cloud:** Supabase project (orgs, org_members, transcripts_text, visibility_grants + RLS; Edge Function invite); app local đăng nhập + push từng bản; màn org viewer + quản lý grants. Schema/flow chi tiết: `supabase/migrations/001_org.sql` (khi build).
+- **Đợt 2b — ví credit (FR-6, đang build):** dùng chung Supabase project với Đợt 2 (001+002 apply cùng lúc); billing schema `supabase/migrations/002_billing.sql`, Edge Functions `llm-correct`/`payos-order`/`payos-webhook`; app local: backend cloud trong pass 2, UI ví + nạp PayOS. Đăng nhập Supabase Auth làm chung ở đợt này (trả nợ Đợt 2). Plan: [docs/plan-credit-wallet.md](docs/plan-credit-wallet.md).
 - **Đợt 3 — mở rộng:** tier ASR `remote` (máy yếu mượn máy mạnh); diarization FluidAudio + system audio tap (BRD mục 4 Phase 2–3); native ASR khi Apple thêm vi_VN vào SpeechTranscriber (probe sẵn: `native/bin/native-asr`).
