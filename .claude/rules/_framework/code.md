@@ -1,0 +1,14 @@
+---
+source: framework
+---
+
+## Code Style
+
+- Minimum code. Surgical changes only. Match existing style and naming conventions.
+- Use strictest type mode. No type escape hatches (`any`, `Object`, `dynamic`) — use `unknown` + narrow.
+- Derive types from schema/source of truth, not manual duplication.
+- Keep functions short (<40 lines, ≤3 params — group into object if more).
+- Prefer discriminated unions over boolean flags for variant types.
+- No: `eval()`, nested ternary, silent catch, WHAT comments.
+- No: `rm -rf`, `DROP TABLE`, `force push` without asking.
+- No new files if existing can be edited. Grep before deleting.

@@ -1,0 +1,15 @@
+---
+description: Rules for AI and LLM application development including token budgets, context management, and prompt safety
+globs: []
+alwaysApply: true
+---
+
+<!-- GENERATED from .claude/templates/rules/app-ai-llm.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## AI / LLM Apps
+
+- Hard per-session and per-user token budget with gateway-level enforcement.
+- Set max_tokens on every LLM call. Auto-compact at 85-90% context window.
+- Never pass unsanitized user input into system prompts. Separate with delimiters.
+- Infrastructure timeouts must exceed expected LLM response times. Streaming idle timeout with retry.

@@ -1,0 +1,47 @@
+---
+description: Backend API, auth, error handling, observability, and concurrency rules
+globs: ["src/api/**", "src/server/**", "src/lib/server/**", "src/app/api/**", "api/**", "server/**", "routes/**", "controllers/**"]
+alwaysApply: false
+---
+
+<!-- GENERATED from .claude/rules/_framework/backend.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## API Design
+
+- Validate all input with schema validation in middleware before route handler.
+- Use standard error format (RFC 9457 Problem Details or consistent envelope). Use HTTP status codes correctly (400, 401, 403, 404, 409, 422, 429, 500).
+- For validation errors: include field-level details in response.
+- Early return for errors at function start. Happy path last.
+- Never expose stack traces or internal paths in API responses.
+- Server-side pagination with enforced max page size.
+- Rate limit all public endpoints (not just auth). Include `Retry-After` header on 429 responses.
+- Set request timeout on every external HTTP call — AI generates hanging requests by default.
+- Never trust client-sent IDs for authorization. Always verify resource ownership server-side (IDOR prevention).
+
+## Auth
+
+- Tokens in httpOnly+Secure+SameSite cookies. Never localStorage.
+- Regenerate session ID after login and privilege escalation.
+- PKCE for all OAuth authorization code flows.
+- Rate limit auth endpoints with progressive delays.
+- Access tokens: short-lived (≤15min). Verify issuer, audience, expiry claims.
+
+## Error Handling
+
+- Catch errors as unknown type — narrow before accessing properties.
+- Centralized error handler: catches all, maps to response, logs, never leaks internals.
+- Handle unhandled exceptions at process level — log and exit gracefully.
+
+## Observability
+
+- Use structured logging (JSON). Never bare debug prints in production.
+- Never log PII, credentials, or full request/response bodies.
+- Add error tracking service. Health endpoint: `GET /health`.
+- Graceful shutdown: on termination signal, stop accepting new requests, drain in-flight, close connections, exit.
+
+## Concurrency
+
+- Idempotency keys on all payment/mutation requests.
+- Atomic operations for counters when applicable.
+- Auth/payment/mutation changes → require human review.

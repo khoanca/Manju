@@ -1,0 +1,16 @@
+---
+description: Rules for e-commerce and payment processing including Stripe integration, idempotency, and inventory safety
+globs: []
+alwaysApply: true
+---
+
+<!-- GENERATED from .claude/templates/rules/app-ecommerce.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## E-commerce / Payments
+
+- Idempotency key on every Stripe payment creation request.
+- Verify Stripe webhook signatures using raw body BEFORE JSON parsing.
+- Validate pricing/totals server-side. Never trust client-submitted amounts.
+- Atomic DB operations for inventory decrement. No read-then-write without lock.
+- Never embed sk_live_ keys in client code, VCS, or logs.

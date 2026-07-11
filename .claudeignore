@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+.git/
+# Lock files: committed to git (source of truth per git.md), but excluded from
+# context because they're very large. Temporarily un-ignore for dependency/security audits.
+*.lockb
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+.DS_Store
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.eot

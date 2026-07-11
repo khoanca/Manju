@@ -1,0 +1,50 @@
+---
+source: framework
+paths:
+  - "prisma/**"
+  - "drizzle/**"
+  - "src/db/**"
+  - "src/lib/db/**"
+  - "*.sql"
+  - "migrations/**"
+  - "db/**"
+  - "models/**"
+---
+
+## General
+
+- Avoid N+1: use eager loading, includes, or explicit JOINs.
+- Never add NOT NULL column without DEFAULT to populated table.
+- Never DELETE or UPDATE without a WHERE clause.
+- Expand-contract for column renames/drops in production (add new → migrate data → remove old). Early-stage apps can rename directly.
+- Create indexes without blocking writes (use non-blocking/concurrent mode when available).
+- Every migration must have a tested rollback method. Backup before destructive migrations.
+- Use connection pooling for serverless environments.
+- Parameterized queries only. Never raw string interpolation in SQL.
+
+## Seeding & Test Data
+
+- Maintain a seed script for development/test environments.
+- Seed data must match actual schema — read migration files before writing fixtures.
+- Separate seed data: base (always needed) vs scenario-specific.
+- Never seed production databases. Guard with environment check.
+
+## ORM Guidelines
+
+- Use migration-based workflow for tracked schema changes. Push/sync only in prototyping.
+- Use explicit field selection. Never return full models with unbounded relations.
+- Use transactions for multi-step writes where atomicity is required.
+- Generate types/client in CI to ensure they match schema.
+- Review generated SQL before applying to production.
+
+## Caching
+
+- Set TTL on cache keys unless explicitly invalidated on write.
+- Invalidate cache on writes. Never rely on eviction alone.
+- Include tenant/user identifier in cache keys for multi-user data.
+
+## AI Agent Safety
+
+- Never give AI agents direct write access to production databases.
+- Use read-only replicas or branch databases for AI-assisted queries.
+- Review all AI-generated migrations before applying.

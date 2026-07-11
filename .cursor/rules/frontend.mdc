@@ -1,0 +1,41 @@
+---
+description: Frontend components, data fetching, mutations, accessibility, and performance rules
+globs: ["src/components/**", "src/app/**", "src/pages/**", "src/views/**", "src/hooks/**", "src/composables/**", "app/components/**", "components/**"]
+alwaysApply: false
+---
+
+<!-- GENERATED from .claude/rules/_framework/frontend.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## Components
+
+- Default to server-side rendering for content/SEO-driven apps; use client-side rendering for SPAs, widgets, or offline-first apps. Match the app type.
+- Push client-side boundaries to leaf components — never on wrappers/layouts.
+- Composition over configuration. Pass children/slots, not boolean toggle props.
+
+## Data Fetching
+
+- Never use local state + side effects for data fetching (e.g., useState+useEffect, reactive state+onMounted). Use server-side data loading or a dedicated query library.
+- Fetch data in parallel in sibling components — avoid request waterfalls.
+- Never roll custom in-memory cache in serverless. Use framework caching primitives.
+
+## Server-Side Mutations
+
+- Server-side mutation endpoints are public HTTP endpoints — always re-verify auth/authz inside each handler.
+- Defense-in-depth auth: request interceptor (optimization only) → mutation handler (verify authentication) → data access layer (verify authorization). Never rely on interceptors as sole auth check.
+- After mutation, invalidate affected caches/paths per framework API.
+- Return error unions from mutation handlers, don't throw to the client.
+
+## Accessibility
+
+- Native HTML elements first. Only ARIA when no semantic element exists.
+- Every interactive element must be keyboard accessible.
+- Every image needs alt text. Decorative images use `alt=""`.
+- Manage focus after navigation, modal open/close, and dynamic content changes.
+
+## Performance
+
+- Core Web Vitals targets: LCP < 2.5s, INP < 200ms, CLS < 0.1.
+- Virtualize lists/tables exceeding 100 rows.
+- Use framework image component with width/height. Prefer modern formats (WebP/AVIF).
+- Prioritize LCP resource loading. Lazy-load below-fold images.

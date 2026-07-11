@@ -1,0 +1,15 @@
+---
+description: Rules for dashboard and data-heavy applications including virtualization, pagination, and resource management
+globs: []
+alwaysApply: true
+---
+
+<!-- GENERATED from .claude/templates/rules/app-dashboard.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## Dashboard / Data-heavy
+
+- Virtualize tables/lists > 100 rows.
+- Large exports via server-side streaming with chunked transfer. Never build in browser.
+- Cursor-based pagination with enforced max page size.
+- Release DB connections in finally. Alert when pool waiting connections spike.

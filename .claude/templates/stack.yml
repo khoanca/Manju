@@ -1,0 +1,65 @@
+# Project Stack Configuration — Manju (Meeting Transcriber)
+# Filled by /init-project (docs-only mode) from pyproject.toml + uv.lock.
+# This is a Python project — the schema below is adapted from the Node-oriented
+# template. Update when upgrading dependencies.
+
+provenance:
+  verified_at: "2026-07-09"
+  source: "detected"
+  detected_from: "pyproject.toml + uv.lock"
+
+runtime:
+  python: "3.12"            # pinned >=3.12,<3.13 (tránh thiếu wheel ctranslate2)
+  package_manager: "uv"
+
+framework:
+  name: "fastapi"
+  version: "0.138.1"
+  server: "uvicorn"
+  server_version: "0.49.0"
+
+language:
+  python_typing: "type hints"   # chưa cấu hình mypy/pyright
+
+asr:
+  faster_whisper: "1.2.1"       # tier cuda/cpu
+  mlx_whisper: "0.4.3"          # tier mlx (Apple Silicon, mặc định)
+  default_model: "large-v3-turbo"
+  engine_tiers: "mlx -> cuda -> cpu"
+
+llm_pass2:
+  primary: "ollama"             # model gemma4:e4b
+  fallback: "openrouter"        # OPENROUTER_MODEL mặc định anthropic/claude-haiku-4.5
+
+ui:
+  type: "pwa"                   # vanilla JS static, service worker, OPFS
+  css: "vanilla"
+  component_lib: "none"
+
+validation:
+  library: "pydantic"           # đi kèm fastapi
+  version: ""
+
+database:
+  engine: "sqlite"              # data/manju.db (WAL)
+  orm: "none"                   # SQL trực tiếp qua app/db.py
+  cache: "none"
+
+integrations:
+  mcp: "1.28.1"                 # mcp_server/server.py (stdio)
+  http_client: "httpx 0.28.1"
+  multipart: "python-multipart 0.0.32"
+
+auth:
+  provider: ""                  # local-first, chưa có auth (org sync đợt sau: Supabase)
+  strategy: ""
+
+testing:
+  unit: "pytest"                # tests/ — 21 test (helpers thuần, không load model)
+  e2e: ""
+  lint: "ruff"                  # cấu hình [tool.ruff] trong pyproject.toml
+  typecheck: "mypy"             # cấu hình [tool.mypy] trong pyproject.toml
+
+deployment:
+  platform: "self-hosted"       # local-first; org sync -> supabase (đợt sau)
+  ci: "none"

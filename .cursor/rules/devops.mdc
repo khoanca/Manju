@@ -1,0 +1,31 @@
+---
+description: CI/CD and dependency upgrade rules
+globs: ["Dockerfile*", "docker-compose*", ".github/**", ".gitlab-ci*", ".circleci/**", "Jenkinsfile", "Makefile", "Procfile"]
+alwaysApply: false
+---
+
+<!-- GENERATED from .claude/rules/_framework/devops.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## CI/CD
+
+- Pin CI action/plugin versions to immutable references (commit SHA, digest), not mutable tags.
+- Never hardcode secrets in CI configs. Use platform secret management.
+- Minimize default CI token permissions. Use read-only where possible.
+- Run security scanning in CI. Fail on HIGH/CRITICAL.
+- Run dependency audit in CI. Fail on HIGH/CRITICAL.
+- Use frozen lockfile mode in CI — never install without it.
+- Use peer review + automated quality gates (tests, scans) as deployment control.
+- Run typecheck + lint + test in CI — all must pass before merge.
+- Pin runtime to current LTS version.
+- Use preview/staging environments to test before production.
+- Separate environment configs: development, staging, production. Never share databases across environments.
+- Never run AI agents against production databases.
+
+## Dependency Upgrades
+
+- Before major upgrade: read the migration guide/changelog.
+- Identify breaking changes and search for affected APIs in codebase.
+- Upgrade one dependency at a time. Run full test suite after each.
+- Use official codemods when available.
+- Update lockfile. Verify build succeeds.

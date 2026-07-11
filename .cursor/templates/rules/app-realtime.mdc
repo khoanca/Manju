@@ -1,0 +1,16 @@
+---
+description: Rules for real-time applications using WebSocket, SSE, or chat including connection management and reconnection
+globs: []
+alwaysApply: true
+---
+
+<!-- GENERATED from .claude/templates/rules/app-realtime.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## Real-time (WebSocket/SSE/Chat)
+
+- Remove all listeners/timers/subscriptions in both close and error handlers.
+- Max-size limit on per-connection message buffers. Evict oldest on overflow.
+- Reconnect with exponential backoff + jitter. Max 10-15 retries.
+- Track message sequence numbers. Sync missed messages on reconnect.
+- Authenticate at handshake. Implement token renewal for long-lived sessions.

@@ -1,0 +1,15 @@
+---
+description: Rules for progressive web apps and offline-first applications including service workers, caching, and sync
+globs: ["**/service-worker*", "**/sw.{js,ts}", "**/workbox*", "**/manifest.{json,webmanifest}"]
+alwaysApply: false
+---
+
+<!-- GENERATED from .claude/templates/rules/app-pwa.md by sync-cursor-rules.sh — do not edit by hand -->
+
+
+## PWA / Offline-first
+
+- Version service worker caches. Delete all previous versions in activate handler.
+- Server-side version-check endpoint with no-cache headers. Force-reload on new version.
+- Scope cached user data by user ID. Purge all user caches on logout.
+- Offline mutation queue with conflict resolution and retry on reconnect.

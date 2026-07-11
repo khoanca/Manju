@@ -1,0 +1,47 @@
+# Build outputs
+dist/
+build/
+.next/
+out/
+.nuxt/
+.output/
+
+# Dependencies
+node_modules/
+
+# Coverage & test artifacts
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# Generated files
+*.min.js
+*.min.css
+*.map
+*.d.ts.map
+
+# Package manager
+.pnpm-store/
+.yarn/cache/
+
+# IDE & OS
+.idea/
+.vscode/settings.json
+*.swp
+.DS_Store
+Thumbs.db
+
+# Large data/media
+*.sqlite
+*.db
+*.sql.gz
+*.tar.gz
+*.zip
+public/uploads/
+
+# Lock files: committed to git (source of truth), excluded from context for size.
+# Temporarily un-ignore for dependency/security audits.
+pnpm-lock.yaml
+yarn.lock
+package-lock.json

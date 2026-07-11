@@ -1,0 +1,31 @@
+{
+  "framework_version": "1.1.0",
+  "files": {
+    ".claude/skills/apply-framework/SKILL.md": "38fb1ed2b9a846f93604558d7348fd657da3992877eb03cad1887df826e9abfc",
+    ".claude/skills/audit-baseline/SKILL.md": "cd64972ccff40a3607d5321911650b10d187df63e275a7b362ca90a502920295",
+    ".claude/skills/audit-plan/SKILL.md": "1903a6aa03530a2ccc6283980df01dd598c498e4bbe6f79beb043ffb5fae38d2",
+    ".claude/skills/audit-skills/SKILL.md": "4a445a85fb90db57aa5fa32f7cdaa96145bacd27e89ad1c960f318ae41672198",
+    ".claude/skills/comprehensive-test/SKILL.md": "02897d54378fb1b850667681c50aaffeebfe997db000789ef8e1379c203223f2",
+    ".claude/skills/debug/SKILL.md": "06f5ae3d9897a835a92615be99746a6e4f553685586a09495fb267584d332750",
+    ".claude/skills/deploy/SKILL.md": "018454a39f195f52e485e37db01ad3a9f0570c8e29546a5228d6b3d250bd1f1f",
+    ".claude/skills/gen-test/SKILL.md": "279ccf33e45a027d002dcadfb86db4f8ec35cd51181a9240116df97e5db4efdb",
+    ".claude/skills/init-project/SKILL.md": "1bb0999838097771f381d24f9f1e51eadfe55ec09d5a374f1b2943e7f461be73",
+    ".claude/skills/optimize-context/SKILL.md": "7511db8a1e50c6a747d4236d00c3c09b9468a22996a222c22008aea42c3c418a",
+    ".claude/skills/plan-feature/SKILL.md": "f9b802972b535e3e0d293849616a7004d92d02455714719258a0292031d31016",
+    ".claude/skills/product-plan/SKILL.md": "0ac553c59c70866c700817961effb4da9cb5d9287506e24204522f65736b9303",
+    ".claude/skills/research-business/SKILL.md": "1e24d95b57da375d4177bf598087f2cc0fd7e1b6643e5114796825342625204d",
+    ".claude/skills/research-codebase/SKILL.md": "4b219abbb39854bf2d944c35c42c5f0112c40f927ab06ece79fed2656db8904e",
+    ".claude/skills/review-changes/SKILL.md": "f019aff4eb3554b00450903533a7f27df70405665b16804221b31e2cd4f21cf6",
+    ".claude/skills/scout-repos/SKILL.md": "6b446ebc7c798e0433488c39bcbf11d868eb2bcf7fcb46f962ddfc492e2684aa",
+    ".claude/rules/_framework/backend.md": "91163e7684456ce9f0da63b9bf3ec7e9af5e1e2ee501123af7fea4f59a6e84c9",
+    ".claude/rules/_framework/code.md": "8810d7c11deb83b7a4c947643c4f5322117ea679b59efd989d754da464c3cc03",
+    ".claude/rules/_framework/database.md": "ffcf748d42ef2bb16d3f5dd02fe04d1d39952d0fec41ed27c777617a48dfffa4",
+    ".claude/rules/_framework/devops.md": "1c6a89dbb88880a42e1c148b715060473854e878fc233fb057d4e92f40e2a452",
+    ".claude/rules/_framework/frontend.md": "53b031b2a5c7ec3c866519e0a8b781dc99f2ef8bf4180aeadb01a86e673b5534",
+    ".claude/rules/_framework/git.md": "e12f84aab42e2fbef6855431452a0c231641f97c340f6754aa5eb8014e607a9e",
+    ".claude/rules/_framework/guardrails.md": "2401c01d15faf77ac75355bfb6543696b78a2f87d38d80573345f9cd6aac64ed",
+    ".claude/rules/_framework/security.md": "1352f1633e43836ffe815453807774a690cf0fef4df048a3c8f37c699b86b22e",
+    ".claude/rules/_framework/testing.md": "f4455808eef66b7f31dbbb29b95d39b93d9d5c30621808e2e1c0556b7ac9b92f",
+    "CLAUDE.md": "f4c5f6bbc6c1d5ad69377b961355013ca96d2d8db531ff127fc1bc9962ee9619"
+  }
+}
