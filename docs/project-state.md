@@ -25,16 +25,17 @@ Nguồn: [PRD.md](../PRD.md) §2 (FR-1..). Điền chi tiết khi chạy `/plan-
 | 2 - Product | Complete | 2026-07-09 | PRD.md (v1.0, Approved) |
 
 ## Session Resume
-Last updated: 2026-07-09
-Summary: Framework được init ở chế độ docs-only trên dự án Python/uv có sẵn (Manju — Meeting Transcriber). BRD + PRD đã có, đang build Đợt 1. Không scaffold; commands trong CLAUDE.md đã trỏ lệnh uv thật. Bước tiếp: `/plan-feature` hoặc `/audit-plan`.
+Last updated: 2026-07-11
+Summary: /apply-framework chạy lại — không còn artifact `.framework.*`. Baseline audit + refactor hoàn tất (xem docs/tech-debt.md): hàm dài/nhiều params gom vào dataclass, CLAUDE.md 73/80 dòng (Layer 0 tách sang .claude/rules/project/routing-layer0.md), git init + checkpoint, 27 test + ruff + mypy xanh. Đợt 2 (org sync) đang dở — xem mục bên dưới.
 
 ### Trạng thái Đợt 1
 Kiểm tra 2026-07-11: **Đợt 1 hoàn chỉnh** — FR-1..FR-4 đều đã cài đặt (EngineRegistry, SQLite+migration, audio dir configurable, multi-session, wake lock, WS reconnect/resume+replay, PWA+OPFS). Code compile + import sạch.
 
 ### Tech debt / gaps
-- ✅ ĐÃ XONG (2026-07-11): cấu hình test/lint/typecheck. Thêm pytest+ruff+mypy, `tests/` (21 test, pass), cấu hình trong pyproject.toml. Gate `uv run pytest / ruff check / mypy` đều xanh.
-- `.env` chứa OPENROUTER_API_KEY thật (đã gitignore, nhưng repo chưa init git). Cân nhắc rotate nếu từng lộ.
-- Repo chưa init git → chưa có branch/commit theo git.md.
+- ✅ ĐÃ XONG (2026-07-11): cấu hình test/lint/typecheck. Thêm pytest+ruff+mypy, `tests/` (27 test, pass), cấu hình trong pyproject.toml. Gate `uv run pytest / ruff check / mypy` đều xanh.
+- ✅ ĐÃ XONG (2026-07-11): git init + checkpoint. `.env` được ignore đúng; `data/manju.db*` đã gỡ khỏi tracking; `uv.lock` chuyển sang tracked (git.md: commit lockfile).
+- ✅ ĐÃ XONG (2026-07-11): baseline refactor theo /audit-baseline — mọi hàm đạt chuẩn code.md (<40 dòng, ≤3 params) qua dataclass specs (`TranscriptRecord`, `SyncState`, `DecodeSpec`, `JobSpec`, `TranscriptDraft`, `LlmOpts`, `TranscribeForm`). Chi tiết: docs/tech-debt.md.
+- `.env` chứa OPENROUTER_API_KEY thật (đã gitignore). Cân nhắc rotate nếu từng lộ.
 ### Đợt 2 — org sync (đang build, kickoff 2026-07-11)
 Đã build phần nền không cần Supabase project thật:
 - ✅ Schema + RLS: [supabase/migrations/001_org.sql](../supabase/migrations/001_org.sql) — orgs, org_members, visibility_grants, transcripts_text (text-only, owner_id default auth.uid()), 3 helper SECURITY DEFINER + policy thực thi ma trận quyền PRD FR-5.

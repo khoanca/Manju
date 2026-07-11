@@ -4,26 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-This is a **development framework template** — not a runnable application. It provides Claude Code skills, rules, and Cursor rules that get copied into target projects via `setup.sh`.
+**Manju — Meeting Transcriber**: app transcribe cuộc họp local-first (tiếng Việt xen thuật ngữ tiếng Anh), Whisper chạy trên máy user.
 
-**New project**: `setup.sh` → `/init-project`
-**Existing project**: `setup.sh --merge` → `/apply-framework`
-
-**Lifecycle**: `/init-project` → `/research-business` (BRD) → `/product-plan` (PRD) → `/scout-repos` (fork-or-build) → `/plan-feature` → code → `/comprehensive-test` → `/review-changes` → `/deploy`
-**Health check**: `/audit-plan` (verify implementation aligns with BRD/PRD, detect drift, score progress — run anytime after Phase 1)
-**Maintenance**: `/optimize-context` (reduce token usage by compressing rules/skills/docs)
-
-**Key structure**:
-- `.claude/rules/` — loaded recursively. Split by ownership:
-  - `_framework/` — **framework-owned** (backend, frontend, database, security, devops, code, git, guardrails, testing). Each carries `source: framework`. Tracked by hash in `.claude/.framework-manifest.json`; `setup.sh` upgrades these only if unmodified. **Do not hand-edit** — your edits become merge conflicts on upgrade.
-  - `project/` — **user-owned**. The framework never writes here. Put business/domain rules here. When a `project/` rule and a `_framework/` rule overlap, the project rule wins (be explicit about the override).
-  - Path scope: a rule with `paths` frontmatter loads only on matching files; without `paths` it loads every turn.
-- `.claude/skills/` — slash command definitions with SKILL.md specs
-- `.claude/guides/` — shared reference docs used by multiple skills (stack detection, commands config, tech evaluation)
-- `.claude/templates/` — app-type rule templates + stack.yml + .claudeignore template
-- `.cursor/rules/` — Cursor rules (.mdc), **generated** from `.claude/rules/**` by `sync-cursor-rules.sh`. Never hand-edit; edit `.claude/rules/` (source of truth) then run `./sync-cursor-rules.sh`. `--check` fails if out of sync (CI guard).
-- `setup.sh` — copies framework files into a target project; maintains `.framework-manifest.json` for safe upgrades
-- `sync-cursor-rules.sh` — regenerates `.cursor/rules/*.mdc` from `.claude/rules/**/*.md` (anti-drift; single source of truth)
+- `app/` — FastAPI + PWA vanilla JS (`app/static/`): upload file hoặc live subtitle qua WebSocket (`app/live.py`); pass 2 sửa thuật ngữ bằng LLM (`app/correct.py` — Ollama local, fallback OpenRouter)
+- `app/engines.py` — chọn tier ASR theo máy: mlx (Apple Silicon) → cuda → cpu
+- `mcp_server/` — MCP server (stdio) cho Claude đọc transcript
+- Data: SQLite `data/manju.db` (nguồn chân lý) + artifact `data/transcripts/*.txt`
+- Rules: `.claude/rules/_framework/` do framework quản (không sửa tay — upgrade qua `setup.sh`); rule riêng đặt ở `.claude/rules/project/` (thắng khi trùng). `.cursor/rules/` generate bằng `./sync-cursor-rules.sh` (`--check` là CI guard).
+- Docs: `docs/project-state.md` (trạng thái + Session Resume), `docs/tech-debt.md` (nợ baseline), BRD.md, PRD.md, `.claude/templates/stack.yml` (stack đã detect)
 
 ## Language
 
@@ -42,21 +30,7 @@ This is a **development framework template** — not a runnable application. It 
 
 Two-layer routing. Layer 1 handles 80%+ of prompts. Only escalate to Layer 2 when needed.
 
-### Layer 0 — Decompose & map (every actionable prompt)
-
-Before routing, break the goal into the smallest independent pieces. Skip ONLY for pure Q&A/explain/review (answer directly).
-
-- For a code/feature task: split the feature into small work items. For each, mark **‖ parallel** (no dependency on another item) or **→ sequential** (depends on an item — name which). Build an execution map:
-  ```
-  A. schema + migration        → (blocks B, C)
-  B. API endpoint              ‖ with C, after A
-  C. validation/types          ‖ with B, after A
-  D. UI                        → after B
-  E. tests                     ‖ per-item, after each item lands
-  ```
-- Then ASK how to execute: **(1)** I spawn agents to run parallel items concurrently, or **(2)** you open multiple sessions yourself. Don't assume — this is a user decision.
-- If user picks multiple sessions: write the map to `docs/parallel-plan.md` (items, parallel/sequential, dependencies, "session N runs X") for them to follow.
-- The map sets parallelism; it does NOT skip gates. Still run the normal Layer 1/2 flow, `/scout-repos`/`/plan-feature` gates, and domain rules per item.
+**Layer 0 — Decompose & map** (every actionable prompt): break the goal into work items, mark ‖ parallel / → sequential, ASK user how to execute. Full rule: `.claude/rules/project/routing-layer0.md` (auto-loaded).
 
 ### Layer 1 — Intent (always runs first)
 

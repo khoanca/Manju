@@ -15,6 +15,7 @@ import difflib
 import os
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import httpx
 
@@ -39,6 +40,17 @@ CHUNK_CHARS = 1800
 TIMEOUT_S = 180
 # Chunk sửa xong khác gốc quá mức này → coi là LLM "sửa quá tay", giữ bản gốc.
 MIN_SIMILARITY = 0.6
+
+
+@dataclass(frozen=True)
+class LlmOpts:
+    """Tham số 1 lượt gọi LLM sửa thuật ngữ. Mặc định cho full-text (upload);
+    live mode dùng num_ctx nhỏ + timeout ngắn để kịp subtitle."""
+
+    glossary: str = ""
+    context: str = ""  # vài câu trước đó — chỉ backend OpenRouter dùng
+    num_ctx: int = 8192  # chỉ backend Ollama dùng
+    timeout: float = TIMEOUT_S
 
 _SYSTEM_PROMPT = (
     "Bạn là công cụ soát lỗi transcript cuộc họp tiếng Việt có pha thuật ngữ "
@@ -92,13 +104,7 @@ def _clean_output(raw: str) -> str:
     return text
 
 
-def _correct_chunk(
-    client: httpx.Client,
-    chunk: str,
-    glossary: str,
-    num_ctx: int = 8192,
-    timeout: float = TIMEOUT_S,
-) -> str:
+def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
     resp = client.post(
         f"{OLLAMA_URL}/api/chat",
         json={
@@ -107,25 +113,19 @@ def _correct_chunk(
             "think": False,
             # num_ctx cố định: không kế thừa OLLAMA_CONTEXT_LENGTH của server
             # (context quá lớn làm KV cache phình, model tràn RAM → cực chậm).
-            "options": {"temperature": 0.1, "num_ctx": num_ctx},
+            "options": {"temperature": 0.1, "num_ctx": opts.num_ctx},
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _prompt_for(chunk, glossary)},
+                {"role": "user", "content": _prompt_for(chunk, opts.glossary)},
             ],
         },
-        timeout=timeout,
+        timeout=opts.timeout,
     )
     resp.raise_for_status()
     return _guard(chunk, _clean_output(resp.json()["message"]["content"]))
 
 
-def _correct_chunk_openrouter(
-    client: httpx.Client,
-    chunk: str,
-    glossary: str,
-    context: str = "",
-    timeout: float = 30.0,
-) -> str:
+def _correct_chunk_openrouter(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
     # Không set temperature: các model Claude đời mới từ chối sampling params.
     resp = client.post(
         f"{OPENROUTER_URL}/chat/completions",
@@ -134,10 +134,10 @@ def _correct_chunk_openrouter(
             "model": OPENROUTER_MODEL,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _prompt_for(chunk, glossary, context)},
+                {"role": "user", "content": _prompt_for(chunk, opts.glossary, opts.context)},
             ],
         },
-        timeout=timeout,
+        timeout=opts.timeout,
     )
     resp.raise_for_status()
     return _guard(chunk, _clean_output(resp.json()["choices"][0]["message"]["content"]))
@@ -152,18 +152,12 @@ def _guard(chunk: str, fixed: str) -> str:
     return fixed
 
 
-def correct_sentence(
-    text: str,
-    glossary: str = "",
-    context: str = "",
-    num_ctx: int = 2048,
-    timeout: float = 20.0,
-) -> tuple[str, bool]:
-    """Sửa 1 câu (live mode): timeout ngắn để kịp subtitle.
+def correct_sentence(text: str, opts: LlmOpts) -> tuple[str, bool]:
+    """Sửa 1 câu (live mode) — caller đặt num_ctx nhỏ + timeout ngắn cho kịp subtitle.
 
-    `context` = vài câu trước đó — Claude dựa vào mạch cuộc họp để đoán đúng
-    thuật ngữ (Ollama local bỏ qua để đỡ tốn ctx). Trả (câu đã sửa, True) nếu
-    chạy trót lọt, ngược lại (câu gốc, False). Cùng contract never-fail như
+    `opts.context` = vài câu trước đó — Claude dựa vào mạch cuộc họp để đoán
+    đúng thuật ngữ (Ollama local bỏ qua để đỡ tốn ctx). Trả (câu đã sửa, True)
+    nếu chạy trót lọt, ngược lại (câu gốc, False). Cùng contract never-fail như
     correct_text.
     """
     text = text.strip()
@@ -173,10 +167,10 @@ def correct_sentence(
         with httpx.Client() as client:
             if openrouter_enabled():
                 try:
-                    return _correct_chunk_openrouter(client, text, glossary, context, timeout), True
+                    return _correct_chunk_openrouter(client, text, opts), True
                 except Exception:  # noqa: BLE001 — mạng rớt/hết credit → thử LLM local
                     pass
-            return _correct_chunk(client, text, glossary, num_ctx, timeout), True
+            return _correct_chunk(client, text, opts), True
     except Exception:  # noqa: BLE001 — Ollama tắt/timeout → dùng bản gốc
         return text, False
 
@@ -192,16 +186,17 @@ def correct_text(
         return text, False
     chunks = _split_chunks(text)
     fixed_parts: list[str] = []
+    opts = LlmOpts(glossary=glossary)
     try:
         with httpx.Client() as client:
             for i, chunk in enumerate(chunks):
                 if openrouter_enabled():
                     try:
-                        fixed = _correct_chunk_openrouter(client, chunk, glossary, timeout=TIMEOUT_S)
+                        fixed = _correct_chunk_openrouter(client, chunk, opts)
                     except Exception:  # noqa: BLE001 — rơi về LLM local
-                        fixed = _correct_chunk(client, chunk, glossary)
+                        fixed = _correct_chunk(client, chunk, opts)
                 else:
-                    fixed = _correct_chunk(client, chunk, glossary)
+                    fixed = _correct_chunk(client, chunk, opts)
                 fixed_parts.append(fixed)
                 if on_progress:
                     on_progress((i + 1) / len(chunks))

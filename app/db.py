@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,21 +64,25 @@ def init() -> None:
 
 
 # ── Transcripts ────────────────────────────────────────────────────────────
-def insert_transcript(
-    *,
-    transcript_id: str,
-    title: str,
-    language: str,
-    model: str | None,
-    duration: float,
-    created_at: str,
-    text: str,
-    raw_text: str | None,
-    segments: list[dict] | None,
-    llm_model: str | None,
-    audio_file: str | None,
-    audio_dir: str | None,
-) -> None:
+@dataclass(frozen=True)
+class TranscriptRecord:
+    """Một bản ghi transcripts đầy đủ — chars/words/corrected suy ra khi insert."""
+
+    transcript_id: str
+    title: str
+    language: str
+    model: str | None
+    duration: float
+    created_at: str
+    text: str
+    raw_text: str | None
+    segments: list[dict] | None
+    llm_model: str | None
+    audio_file: str | None
+    audio_dir: str | None
+
+
+def insert_transcript(rec: TranscriptRecord) -> None:
     with _connect() as conn:
         conn.execute(
             """INSERT OR REPLACE INTO transcripts
@@ -85,11 +90,11 @@ def insert_transcript(
                 segments, chars, words, corrected, llm_model, audio_file, audio_dir)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                transcript_id, title, language, model, round(duration, 1), created_at,
-                text, raw_text,
-                json.dumps(segments, ensure_ascii=False) if segments else None,
-                len(text), len(text.split()), int(raw_text is not None), llm_model,
-                audio_file, audio_dir,
+                rec.transcript_id, rec.title, rec.language, rec.model,
+                round(rec.duration, 1), rec.created_at, rec.text, rec.raw_text,
+                json.dumps(rec.segments, ensure_ascii=False) if rec.segments else None,
+                len(rec.text), len(rec.text.split()), int(rec.raw_text is not None),
+                rec.llm_model, rec.audio_file, rec.audio_dir,
             ),
         )
 
@@ -204,14 +209,15 @@ def get_sync_state(transcript_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def set_sync_state(
-    transcript_id: str,
-    *,
-    org_id: str,
-    remote_id: str | None,
-    pushed_at: str,
-    status: str = "pushed",
-) -> None:
+@dataclass(frozen=True)
+class SyncState:
+    org_id: str
+    remote_id: str | None
+    pushed_at: str
+    status: str = "pushed"
+
+
+def set_sync_state(transcript_id: str, state: SyncState) -> None:
     with _connect() as conn:
         conn.execute(
             """INSERT INTO sync_state (transcript_id, org_id, remote_id, pushed_at, status)
@@ -219,11 +225,56 @@ def set_sync_state(
                ON CONFLICT(transcript_id) DO UPDATE SET
                  org_id = excluded.org_id, remote_id = excluded.remote_id,
                  pushed_at = excluded.pushed_at, status = excluded.status""",
-            (transcript_id, org_id, remote_id, pushed_at, status),
+            (transcript_id, state.org_id, state.remote_id, state.pushed_at, state.status),
         )
 
 
 # ── Migration từ file JSON cũ ──────────────────────────────────────────────
+def _legacy_segments(seg: Path) -> str | None:
+    """Đọc file {id}.segments.json cũ → chuỗi JSON cho cột segments; None nếu hỏng."""
+    if not seg.exists():
+        return None
+    try:
+        return json.dumps(json.loads(seg.read_text(encoding="utf-8")), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _legacy_row(meta_file: Path, recordings_dir: Path) -> tuple | None:
+    """Đọc bộ file {id}.json/.txt/.raw.txt/.segments.json cũ thành tuple VALUES;
+    None nếu metadata hỏng hoặc thiếu file text."""
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(meta, dict) or "id" not in meta:
+        return None
+    tid = meta["id"]
+    txt = meta_file.parent / f"{tid}.txt"
+    if not txt.exists():
+        return None
+    raw = meta_file.parent / f"{tid}.raw.txt"
+    segments = _legacy_segments(meta_file.parent / f"{tid}.segments.json")
+    text = txt.read_text(encoding="utf-8")
+    return (
+        tid,
+        meta.get("title") or tid,
+        meta.get("language") or "vi",
+        meta.get("model"),
+        meta.get("duration"),
+        meta.get("created_at") or "",
+        text,
+        raw.read_text(encoding="utf-8") if raw.exists() else None,
+        segments,
+        meta.get("chars") or len(text),
+        meta.get("words") or len(text.split()),
+        int(bool(meta.get("corrected"))),
+        meta.get("llm_model"),
+        meta.get("audio"),
+        str(recordings_dir),
+    )
+
+
 def migrate_from_files(transcripts_dir: Path, recordings_dir: Path) -> int:
     """Đưa transcript dạng file (trước khi có DB) vào SQLite. Idempotent
     (INSERT OR IGNORE), chỉ đọc — không xóa/sửa file gốc. Trả số bản đã thêm."""
@@ -232,49 +283,15 @@ def migrate_from_files(transcripts_dir: Path, recordings_dir: Path) -> int:
         for meta_file in sorted(transcripts_dir.glob("*.json")):
             if meta_file.name.endswith(".segments.json"):
                 continue
-            try:
-                meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
+            row = _legacy_row(meta_file, recordings_dir)
+            if row is None:
                 continue
-            if not isinstance(meta, dict) or "id" not in meta:
-                continue
-            tid = meta["id"]
-            txt = transcripts_dir / f"{tid}.txt"
-            if not txt.exists():
-                continue
-            raw = transcripts_dir / f"{tid}.raw.txt"
-            seg = transcripts_dir / f"{tid}.segments.json"
-            segments = None
-            if seg.exists():
-                try:
-                    segments = json.dumps(
-                        json.loads(seg.read_text(encoding="utf-8")), ensure_ascii=False
-                    )
-                except Exception:  # noqa: BLE001
-                    segments = None
-            text = txt.read_text(encoding="utf-8")
             cur = conn.execute(
                 """INSERT OR IGNORE INTO transcripts
                    (id, title, language, model, duration, created_at, text, raw_text,
                     segments, chars, words, corrected, llm_model, audio_file, audio_dir)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    tid,
-                    meta.get("title") or tid,
-                    meta.get("language") or "vi",
-                    meta.get("model"),
-                    meta.get("duration"),
-                    meta.get("created_at") or "",
-                    text,
-                    raw.read_text(encoding="utf-8") if raw.exists() else None,
-                    segments,
-                    meta.get("chars") or len(text),
-                    meta.get("words") or len(text.split()),
-                    int(bool(meta.get("corrected"))),
-                    meta.get("llm_model"),
-                    meta.get("audio"),
-                    str(recordings_dir),
-                ),
+                row,
             )
             added += cur.rowcount
     return added

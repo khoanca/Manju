@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
@@ -44,25 +45,33 @@ async def ws_live(ws: WebSocket):
     await live.handle(ws)
 
 
+class TranscribeForm(BaseModel):
+    """Toàn bộ form multipart của /api/transcribe — wire format không đổi."""
+
+    file: UploadFile
+    language: str = "vi"
+    model: str = transcribe.DEFAULT_MODEL
+    prompt: str = ""
+    correct: bool = True
+
+
 @app.post("/api/transcribe")
-async def api_transcribe(
-    file: UploadFile,
-    language: str = Form("vi"),
-    model: str = Form(transcribe.DEFAULT_MODEL),
-    prompt: str = Form(""),
-    correct: bool = Form(True),
-):
-    if language not in ("vi", "en"):
+async def api_transcribe(form: Annotated[TranscribeForm, Form()]):
+    if form.language not in ("vi", "en"):
         raise HTTPException(400, "language phải là 'vi' hoặc 'en'")
-    if model not in transcribe.ALLOWED_MODELS:
+    if form.model not in transcribe.ALLOWED_MODELS:
         raise HTTPException(400, "model không hợp lệ")
-    data = await file.read()
+    data = await form.file.read()
     if not data:
         raise HTTPException(400, "File rỗng")
-    job_id = transcribe.start_transcription(
-        data, file.filename or "meeting", language, model, prompt.strip(), correct
+    spec = transcribe.JobSpec(
+        filename=form.file.filename or "meeting",
+        language=form.language,
+        model_name=form.model,
+        prompt=form.prompt.strip(),
+        correct=form.correct,
     )
-    return {"job_id": job_id}
+    return {"job_id": transcribe.start_transcription(data, spec)}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -136,13 +145,11 @@ def api_push(transcript_id: str, body: PushIn):
         raise HTTPException(503, str(exc)) from exc
     except org.OrgError as exc:
         raise HTTPException(502, str(exc)) from exc
-    db.set_sync_state(
-        transcript_id,
+    db.set_sync_state(transcript_id, db.SyncState(
         org_id=body.org_id,
         remote_id=remote.get("id"),
         pushed_at=datetime.now(UTC).astimezone().isoformat(),
-        status="pushed",
-    )
+    ))
     return {"status": "pushed", "remote_id": remote.get("id")}
 
 

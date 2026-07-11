@@ -23,7 +23,7 @@ from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from app import engines, transcribe
-from app.correct import correct_sentence, openrouter_enabled
+from app.correct import LlmOpts, correct_sentence, openrouter_enabled
 
 SAMPLE_RATE = 16000
 TICK_S = 1.2  # nhịp vòng decode
@@ -37,6 +37,7 @@ NO_AUDIO_TIMEOUT_S = 2.0  # mic ngừng gửi frame → coi như hết câu
 CORRECTION_BACKLOG_MAX = 5  # hàng đợi pass 2 dồn quá → bỏ qua câu mới
 MIN_CORRECT_CHARS = 10  # câu quá ngắn không đáng gọi LLM
 CORRECT_NUM_CTX = 2048  # câu đơn → ctx nhỏ cho nhanh (KHÔNG kế thừa config server)
+CORRECT_TIMEOUT_S = 20.0  # câu đơn phải kịp subtitle — không chờ như full-text
 
 # Silero mặc định cần lặng 2s mới tách đoạn — quá chậm cho subtitle; các giá trị
 # nhỏ ở đây chỉ để đo "đuôi buffer còn speech không", không dùng để cắt audio.
@@ -59,15 +60,6 @@ class LiveSession:
         self.loop = loop
         self.language = "en" if cfg.get("language") == "en" else "vi"
         self.engine = engines.get_engine()
-        # Tier CPU: user chọn size model để cân tốc độ máy mình; GPU (mlx/cuda)
-        # luôn dùng model mặc định của engine — nhanh và chính xác hơn mọi lựa chọn.
-        model = cfg.get("model")
-        if self.engine.info.tier == "cpu" and model in transcribe.ALLOWED_MODELS:
-            self.model_override: str | None = model
-            self.model_name = model
-        else:
-            self.model_override = None
-            self.model_name = self.engine.info.model_name
         self.glossary = (cfg.get("glossary") or "").strip()
         self.correct_enabled = bool(cfg.get("correct", True))
         # Client mỏng (PWA) tự giữ audio trong OPFS trên thiết bị → server
@@ -75,19 +67,35 @@ class LiveSession:
         self.store_audio = bool(cfg.get("store_audio", True))
         # Token để client nối lại phiên sau khi rớt WS (resume).
         self.token = uuid.uuid4().hex
+        self._pick_model(cfg.get("model"))
+        self._init_buffers()
+        self._init_recording()
+        self._init_workers()
 
+    def _pick_model(self, model: str | None) -> None:
+        # Tier CPU: user chọn size model để cân tốc độ máy mình; GPU (mlx/cuda)
+        # luôn dùng model mặc định của engine — nhanh và chính xác hơn mọi lựa chọn.
+        if self.engine.info.tier == "cpu" and model in transcribe.ALLOWED_MODELS:
+            override: str | None = model
+            self.model_name = model
+        else:
+            override = None
+            self.model_name = self.engine.info.model_name
+        self.spec = engines.DecodeSpec(self.language, self.glossary, override)
+
+    def _init_buffers(self) -> None:
         self.buffer = bytearray()  # PCM16 của utterance đang mở (+ đuôi chờ khi idle)
         self.buf_lock = threading.Lock()
         self.total_samples = 0
         self.consumed_samples = 0  # tổng sample đã xoá khỏi buffer = vị trí đầu buffer trên timeline
         self.last_rx = time.monotonic()
-
         self.state = "idle"  # idle | open
         self.utt_seq = 0
         self.sentences: dict[int, str] = {}  # bản chính (corrected ghi đè final)
         self.raw_sentences: dict[int, str] = {}
         self.utt_start: dict[int, float] = {}  # mốc bắt đầu mỗi câu (giây, tính từ đầu phiên)
 
+    def _init_recording(self) -> None:
         # Ghi toàn bộ PCM ra file tạm ngay khi nhận (không đọng cả phiên trong
         # RAM) → cuối phiên đóng gói WAV lưu kèm transcript để nghe lại.
         self._rec_path = (
@@ -96,6 +104,7 @@ class LiveSession:
         self._rec_file = open(self._rec_path, "wb") if self._rec_path else None
         self._rec_lock = threading.Lock()
 
+    def _init_workers(self) -> None:
         self.stop_event = threading.Event()
         self.correction_q: queue.Queue = queue.Queue()
         self.started_at = datetime.now(UTC).astimezone()
@@ -157,13 +166,7 @@ class LiveSession:
     def _decode(self, audio: np.ndarray, final: bool) -> str:
         # final=False có thể raise engines.DecodeBusy (phiên khác đang giữ
         # engine) — caller bỏ tick đó, thử lại tick sau.
-        return self.engine.decode(
-            audio,
-            language=self.language,
-            glossary=self.glossary,
-            final=final,
-            model_override=self.model_override,
-        )
+        return self.engine.decode(audio, self.spec, final=final)
 
     # ── Thread decode: state machine idle/open ────────────────────────────
     def _decode_loop(self) -> None:
@@ -283,7 +286,7 @@ class LiveSession:
         if not openrouter_enabled():
             # Warm-up Ollama: load LLM vào RAM để câu đầu không phải chờ.
             # (OpenRouter là API ngoài, không cần warm-up.)
-            correct_sentence("ping", num_ctx=CORRECT_NUM_CTX, timeout=60.0)
+            correct_sentence("ping", LlmOpts(num_ctx=CORRECT_NUM_CTX, timeout=60.0))
         while True:
             item = self.correction_q.get()
             if item is None:
@@ -294,7 +297,13 @@ class LiveSession:
             prev = [self.sentences[k] for k in sorted(self.sentences) if k < utt]
             context = " ".join(prev[-3:])
             fixed, ok = correct_sentence(
-                text, self.glossary, context=context, num_ctx=CORRECT_NUM_CTX
+                text,
+                LlmOpts(
+                    glossary=self.glossary,
+                    context=context,
+                    num_ctx=CORRECT_NUM_CTX,
+                    timeout=CORRECT_TIMEOUT_S,
+                ),
             )
             changed = ok and fixed != text
             if changed:
@@ -337,7 +346,7 @@ class LiveSession:
                 transcribe.pcm_to_wav(pcm, wav_path, SAMPLE_RATE)
             except Exception:  # noqa: BLE001 — lỗi đóng gói audio không được chặn lưu text
                 wav_path = None
-        return transcribe.save_transcript(
+        return transcribe.save_transcript(transcribe.TranscriptDraft(
             original_name=f"live-{self.started_at:%H%M}",
             language=self.language,
             duration=self.total_samples / SAMPLE_RATE,
@@ -346,7 +355,7 @@ class LiveSession:
             raw_text=raw if raw != text else None,
             segments=segments,
             audio_path=wav_path,
-        )
+        ))
 
 
 # ── Resume: phiên rớt WS được giữ chờ client nối lại trước khi chốt & lưu ──
@@ -388,6 +397,56 @@ def _claim_session(token: str | None) -> LiveSession | None:
     return session
 
 
+async def _reject(ws: WebSocket, message: str) -> None:
+    await ws.send_text(json.dumps({"type": "error", "message": message}))
+    await ws.close()
+
+
+async def _start_session(ws: WebSocket, cfg: dict) -> LiveSession | None:
+    """Mở phiên mới; hết slot → báo lỗi, đóng WS, trả None."""
+    if not _slot.acquire(blocking=False):
+        await _reject(ws, "Server đang bận — đủ số phiên live.")
+        return None
+    session = LiveSession(ws, asyncio.get_running_loop(), cfg)
+    session.start()
+    await ws.send_text(json.dumps({"type": "session", "token": session.token}))
+    return session
+
+
+async def _resume_session(ws: WebSocket, token: str | None) -> LiveSession | None:
+    """Nối lại phiên đang park; token hết hạn → báo lỗi, đóng WS, trả None."""
+    session = _claim_session(token)
+    if session is None:
+        await _reject(ws, "Phiên đã kết thúc — bản ghi (nếu có) đã tự lưu.")
+        return None
+    session.rebind(ws, asyncio.get_running_loop())
+    await ws.send_text(json.dumps({"type": "resumed", "bytes": session.total_samples * 2}))
+    return session
+
+
+async def _finish(ws: WebSocket, session: LiveSession | None, finish: bool) -> None:
+    """Dọn phiên khi rời receive loop: stop chủ động → chốt & lưu ngay;
+    rớt WS → park chờ resume (slot vẫn giữ theo phiên đang park)."""
+    try:
+        if session is not None:
+            if finish:
+                transcript_id = await asyncio.to_thread(session.shutdown)
+                try:
+                    await ws.send_text(
+                        json.dumps({"type": "saved", "transcript_id": transcript_id})
+                    )
+                except Exception:  # noqa: BLE001 — client đã rớt
+                    pass
+                _slot.release()
+            else:
+                _park_session(session)
+    finally:
+        try:
+            await ws.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def handle(ws: WebSocket) -> None:
     await ws.accept()
     session: LiveSession | None = None
@@ -401,27 +460,13 @@ async def handle(ws: WebSocket) -> None:
             if msg.get("text"):
                 data = json.loads(msg["text"])
                 if data.get("type") == "start" and session is None:
-                    if not _slot.acquire(blocking=False):
-                        await ws.send_text(
-                            json.dumps({"type": "error", "message": "Server đang bận — đủ số phiên live."})
-                        )
-                        await ws.close()
-                        return
-                    session = LiveSession(ws, asyncio.get_running_loop(), data)
-                    session.start()
-                    await ws.send_text(json.dumps({"type": "session", "token": session.token}))
-                elif data.get("type") == "resume" and session is None:
-                    session = _claim_session(data.get("token"))
+                    session = await _start_session(ws, data)
                     if session is None:
-                        await ws.send_text(
-                            json.dumps({"type": "error", "message": "Phiên đã kết thúc — bản ghi (nếu có) đã tự lưu."})
-                        )
-                        await ws.close()
                         return
-                    session.rebind(ws, asyncio.get_running_loop())
-                    await ws.send_text(
-                        json.dumps({"type": "resumed", "bytes": session.total_samples * 2})
-                    )
+                elif data.get("type") == "resume" and session is None:
+                    session = await _resume_session(ws, data.get("token"))
+                    if session is None:
+                        return
                 elif data.get("type") == "stop":
                     finish = True
                     break
@@ -434,21 +479,4 @@ async def handle(ws: WebSocket) -> None:
                         json.dumps({"type": "ack", "bytes": session.total_samples * 2})
                     )
     finally:
-        try:
-            if session is not None:
-                if finish:
-                    transcript_id = await asyncio.to_thread(session.shutdown)
-                    try:
-                        await ws.send_text(
-                            json.dumps({"type": "saved", "transcript_id": transcript_id})
-                        )
-                    except Exception:  # noqa: BLE001 — client đã rớt
-                        pass
-                    _slot.release()
-                else:
-                    _park_session(session)  # slot vẫn giữ theo phiên đang park
-        finally:
-            try:
-                await ws.close()
-            except Exception:  # noqa: BLE001
-                pass
+        await _finish(ws, session, finish)

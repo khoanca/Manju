@@ -16,7 +16,7 @@ def tmp_db(tmp_path, monkeypatch):
 
 
 def _insert(tid="20260101-000000-hop", corrected=False):
-    db.insert_transcript(
+    db.insert_transcript(db.TranscriptRecord(
         transcript_id=tid,
         title="Họp sprint",
         language="vi",
@@ -29,7 +29,7 @@ def _insert(tid="20260101-000000-hop", corrected=False):
         llm_model="gemma4:e4b" if corrected else None,
         audio_file=None,
         audio_dir=None,
-    )
+    ))
 
 
 def test_insert_read_roundtrip(tmp_db):
@@ -49,11 +49,11 @@ def test_read_missing_returns_none(tmp_db):
 
 def test_list_orders_newest_first(tmp_db):
     _insert(tid="20260101-000000-a")
-    db.insert_transcript(
+    db.insert_transcript(db.TranscriptRecord(
         transcript_id="20260102-000000-b", title="B", language="vi", model="m",
         duration=1.0, created_at="2026-01-02T00:00:00+07:00", text="xin chào",
         raw_text=None, segments=None, llm_model=None, audio_file=None, audio_dir=None,
-    )
+    ))
     ids = [m["id"] for m in db.list_transcripts()]
     assert ids == ["20260102-000000-b", "20260101-000000-a"]
 
@@ -80,17 +80,17 @@ def test_sync_state_roundtrip_and_upsert(tmp_db):
     _insert()
     tid = "20260101-000000-hop"
     assert db.get_sync_state(tid) is None
-    db.set_sync_state(tid, org_id="org-1", remote_id="r-1", pushed_at="2026-01-01T00:00:00+07:00")
+    db.set_sync_state(tid, db.SyncState(org_id="org-1", remote_id="r-1", pushed_at="2026-01-01T00:00:00+07:00"))
     st = db.get_sync_state(tid)
     assert st["status"] == "pushed"
     assert st["remote_id"] == "r-1"
     # Push lại = cập nhật (upsert), không tạo dòng thứ hai.
-    db.set_sync_state(tid, org_id="org-1", remote_id="r-2", pushed_at="2026-01-02T00:00:00+07:00")
+    db.set_sync_state(tid, db.SyncState(org_id="org-1", remote_id="r-2", pushed_at="2026-01-02T00:00:00+07:00"))
     assert db.get_sync_state(tid)["remote_id"] == "r-2"
 
 
 def test_list_includes_sync_status(tmp_db):
     _insert()
     assert db.list_transcripts()[0]["sync"] is None
-    db.set_sync_state("20260101-000000-hop", org_id="o", remote_id="r", pushed_at="2026-01-01T00:00:00+07:00")
+    db.set_sync_state("20260101-000000-hop", db.SyncState(org_id="o", remote_id="r", pushed_at="2026-01-01T00:00:00+07:00"))
     assert db.list_transcripts()[0]["sync"] == "pushed"

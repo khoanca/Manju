@@ -51,13 +51,7 @@ def build_payload(org_id: str, transcript: dict) -> dict:
     }
 
 
-def push_transcript(
-    org_id: str,
-    access_token: str,
-    transcript: dict,
-    *,
-    timeout: float = PUSH_TIMEOUT_S,
-) -> dict:
+def push_transcript(org_id: str, access_token: str, transcript: dict) -> dict:
     """Upsert 1 bản text lên org. Trả row remote (có id) khi thành công."""
     if not org_configured():
         raise OrgNotConfigured("Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY")
@@ -76,7 +70,7 @@ def push_transcript(
                 "Prefer": "resolution=merge-duplicates,return=representation",
             },
             json=payload,
-            timeout=timeout,
+            timeout=PUSH_TIMEOUT_S,
         )
     except httpx.HTTPError as exc:
         raise OrgError(f"Không kết nối được org cloud: {exc}") from exc

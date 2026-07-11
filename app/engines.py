@@ -37,6 +37,15 @@ class FileResult:
     segments: list[dict]  # [{start, text}] — cùng shape với segments của live
 
 
+@dataclass(frozen=True)
+class DecodeSpec:
+    """Tham số decode cố định cho cả phiên live / cả file upload."""
+
+    language: str
+    glossary: str = ""
+    model_override: str | None = None  # chỉ tier CPU dùng (user chọn size model)
+
+
 class DecodeBusy(Exception):
     """Partial decode bị bỏ vì engine đang bận phiên khác."""
 
@@ -63,41 +72,27 @@ def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
 class Engine(ABC):
     info: EngineInfo
 
-    def decode(
-        self,
-        audio: np.ndarray,
-        *,
-        language: str,
-        glossary: str,
-        final: bool,
-        model_override: str | None = None,
-    ) -> str:
+    def decode(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> str:
         """Decode 1 utterance cho live. final=False có thể raise DecodeBusy."""
         if final:
             with _decode_lock:
-                return self._decode(audio, language, glossary, True, model_override)
+                return self._decode(audio, spec, final=True)
         if not _decode_lock.acquire(blocking=False):
             raise DecodeBusy
         try:
-            return self._decode(audio, language, glossary, False, model_override)
+            return self._decode(audio, spec, final=False)
         finally:
             _decode_lock.release()
 
     @abstractmethod
-    def _decode(
-        self, audio: np.ndarray, language: str, glossary: str, final: bool,
-        model_override: str | None,
-    ) -> str: ...
+    def _decode(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> str: ...
 
     @abstractmethod
     def transcribe_file(
         self,
         path: Path,
-        *,
-        language: str,
-        glossary: str,
+        spec: DecodeSpec,
         on_progress: Callable[[str, float], None],
-        model_override: str | None = None,
     ) -> FileResult: ...
 
 
@@ -114,31 +109,31 @@ class MlxEngine(Engine):
         self._repo = os.environ.get("LIVE_MLX_MODEL", "mlx-community/whisper-large-v3-turbo")
         self.info = EngineInfo("mlx", f"{self._repo.rsplit('/', 1)[-1]} (mlx)")
 
-    def _transcribe(self, audio, language: str, glossary: str, final: bool) -> dict:
+    def _transcribe(self, audio, spec: DecodeSpec, final: bool) -> dict:
         return self._mlx.transcribe(
             audio,
             path_or_hf_repo=self._repo,
-            language=language,
+            language=spec.language,
             condition_on_previous_text=False,
-            initial_prompt=glossary or None,
+            initial_prompt=spec.glossary or None,
             # final: cho phép fallback nhiệt độ khi đoạn "khó"; partial: 1 lần cho nhanh.
             temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0) if final else 0.0,
             verbose=None,
         )
 
-    def _decode(self, audio, language, glossary, final, model_override):
-        result = self._transcribe(audio, language, glossary, final)
+    def _decode(self, audio, spec, *, final):
+        result = self._transcribe(audio, spec, final)
         return "".join(
             seg["text"]
             for seg in result["segments"]
             if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
         ).strip()
 
-    def transcribe_file(self, path, *, language, glossary, on_progress, model_override=None):
+    def transcribe_file(self, path, spec, on_progress):
         # Giữ lock suốt file: Metal không share được với decode live. Upload
         # dài sẽ chặn partial của phiên live đang mở — chấp nhận (turbo nhanh).
         with _decode_lock:
-            result = self._transcribe(str(path), language, glossary, final=True)
+            result = self._transcribe(str(path), spec, final=True)
         segs = [
             {"start": round(float(seg["start"]), 2), "text": seg["text"].strip()}
             for seg in result["segments"]
@@ -176,13 +171,13 @@ class FwEngine(Engine):
                 self._models[name] = model
             return model
 
-    def _decode(self, audio, language, glossary, final, model_override):
-        model = self._get_model(model_override or self.live_model)
+    def _decode(self, audio, spec, *, final):
+        model = self._get_model(spec.model_override or self.live_model)
         common = dict(
-            language=language,
+            language=spec.language,
             condition_on_previous_text=False,
-            initial_prompt=glossary or None,
-            hotwords=glossary or None,
+            initial_prompt=spec.glossary or None,
+            hotwords=spec.glossary or None,
         )
         if final:
             segments, _ = model.transcribe(
@@ -207,16 +202,16 @@ class FwEngine(Engine):
             if keep_segment(seg.text, getattr(seg, "no_speech_prob", 0.0), getattr(seg, "avg_logprob", 0.0))
         ).strip()
 
-    def transcribe_file(self, path, *, language, glossary, on_progress, model_override=None):
+    def transcribe_file(self, path, spec, on_progress):
         # CPU/CUDA decode song song được với live → không cần giữ _decode_lock.
-        model = self._get_model(model_override or self.upload_model)
+        model = self._get_model(spec.model_override or self.upload_model)
         segments, info = model.transcribe(
             str(path),
-            language=language,
+            language=spec.language,
             vad_filter=True,
             beam_size=5,
-            initial_prompt=glossary or None,
-            hotwords=glossary or None,
+            initial_prompt=spec.glossary or None,
+            hotwords=spec.glossary or None,
             condition_on_previous_text=False,
             temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
         )

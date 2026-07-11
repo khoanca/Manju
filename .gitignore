@@ -4,7 +4,7 @@ __pycache__/
 data/uploads/
 data/transcripts/
 data/recordings/
+data/manju.db*
 .uv/
-uv.lock
 .DS_Store
 .env
