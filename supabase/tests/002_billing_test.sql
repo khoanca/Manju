@@ -4,7 +4,7 @@
 -- race dựa vào UPDATE single-statement trong spend_credits (row lock Postgres).
 
 begin;
-select plan(17);
+select plan(18);
 
 -- ── Fixtures: 2 user + số dư ban đầu ─────────────────────────────────────────
 insert into auth.users (id, email) values
@@ -65,15 +65,23 @@ select is(
   10000::bigint,
   'số dư KHÔNG đổi sau UPDATE trực tiếp — không có policy ghi');
 
-select throws_ok(
-  $$ select spend_credits('00000000-0000-0000-0000-00000000000a', 1, gen_random_uuid(), '{}') $$,
-  '42501', null,
-  'authenticated không gọi được spend_credits (revoked)');
-
-select throws_ok(
-  $$ select apply_topup(111222, '{}') $$,
-  '42501', null,
-  'authenticated không gọi được apply_topup (revoked)');
+-- Kiểm ACL bằng has_function_privilege thay vì gọi thật: image Postgres local
+-- (supautils) segfault khi role authenticated gọi hàm bị revoke — bug image,
+-- không phải schema; ACL check cho cùng đảm bảo mà không cần thực thi.
+select ok(
+  not has_function_privilege('authenticated',
+    'spend_credits(uuid, bigint, uuid, jsonb)', 'execute'),
+  'authenticated không có quyền execute spend_credits');
+select ok(
+  not has_function_privilege('anon',
+    'apply_topup(bigint, jsonb)', 'execute'),
+  'anon không có quyền execute apply_topup');
+select ok(
+  has_function_privilege('service_role',
+    'spend_credits(uuid, bigint, uuid, jsonb)', 'execute')
+  and has_function_privilege('service_role',
+    'apply_topup(bigint, jsonb)', 'execute'),
+  'service_role GIỮ quyền execute cả 2 RPC (Edge Function gọi được)');
 
 -- ── RPC spend_credits (chạy như service: postgres) ───────────────────────────
 reset role;

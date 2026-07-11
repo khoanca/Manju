@@ -8,3 +8,7 @@ data/manju.db*
 .uv/
 .DS_Store
 .env
+
+# Supabase CLI local artifacts
+supabase/.branches/
+supabase/.temp/

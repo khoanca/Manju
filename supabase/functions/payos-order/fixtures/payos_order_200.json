@@ -1,0 +1,8 @@
+{
+  "orderId": "9f7a1a2b-0000-4000-8000-000000000001",
+  "orderCode": 1752200000000123,
+  "checkoutUrl": "https://pay.payos.vn/web/abc123",
+  "qrCode": "00020101021238570010A000000727...",
+  "amountVnd": 50000,
+  "credits": 50000000
+}

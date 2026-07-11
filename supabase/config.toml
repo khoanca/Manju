@@ -1,5 +1,25 @@
 # Cấu hình Supabase CLI (local stack + deploy). Các section vắng mặt dùng default.
+# Port dời +10 so với default: máy này còn project Supabase khác chạy port gốc.
 project_id = "manju"
+
+[api]
+port = 54331
+
+[db]
+port = 54332
+shadow_port = 54330
+
+[db.pooler]
+port = 54339
+
+[studio]
+port = 54333
+
+[inbucket]
+port = 54334
+
+[analytics]
+port = 54337
 
 # llm-correct / payos-order: platform verify JWT user trước khi vào function.
 # payos-webhook: PayOS gọi vào, không có JWT — tự verify chữ ký HMAC trong code.

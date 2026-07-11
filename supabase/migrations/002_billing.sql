@@ -158,10 +158,14 @@ begin
 end;
 $$;
 
+-- Revoke PUBLIC xóa luôn grant mặc định → service_role cũng mất quyền nếu
+-- không grant lại tường minh (Edge Function gọi RPC bằng service_role).
 revoke execute on function spend_credits(uuid, bigint, uuid, jsonb)
   from public, anon, authenticated;
 revoke execute on function apply_topup(bigint, jsonb)
   from public, anon, authenticated;
+grant execute on function spend_credits(uuid, bigint, uuid, jsonb) to service_role;
+grant execute on function apply_topup(bigint, jsonb) to service_role;
 
 -- ── RLS ─────────────────────────────────────────────────────────────────────
 alter table wallets enable row level security;

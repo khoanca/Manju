@@ -67,6 +67,33 @@ export async function restGet(
   return (await resp.json()) as unknown[];
 }
 
+export async function restPost(
+  path: string,
+  body: unknown,
+  fetchFn: FetchFn = fetch,
+): Promise<unknown[]> {
+  const resp = await fetchFn(`${env("SUPABASE_URL")}/rest/v1/${path}`, {
+    method: "POST",
+    headers: { ...restHeaders(), prefer: "return=representation" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`postgrest POST ${path}: ${resp.status}`);
+  return (await resp.json()) as unknown[];
+}
+
+export async function restPatch(
+  path: string,
+  body: unknown,
+  fetchFn: FetchFn = fetch,
+): Promise<void> {
+  const resp = await fetchFn(`${env("SUPABASE_URL")}/rest/v1/${path}`, {
+    method: "PATCH",
+    headers: restHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`postgrest PATCH ${path}: ${resp.status}`);
+}
+
 export async function rpc(
   fn: string,
   args: Record<string, unknown>,
