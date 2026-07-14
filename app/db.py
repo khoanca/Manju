@@ -276,6 +276,39 @@ def delete_speaker(speaker_id: str) -> None:
                 )
 
 
+def load_voiceprints() -> list[tuple[str, bytes]]:
+    """(speaker_id, embedding bytes float32) mọi người đã enroll — cho auto-match."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT speaker_id, embedding FROM voiceprints").fetchall()
+    return [(r["speaker_id"], r["embedding"]) for r in rows]
+
+
+def get_voiceprint(speaker_id: str) -> tuple[bytes, int] | None:
+    """(embedding bytes, sample_count) của 1 người — None nếu chưa enroll."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT embedding, sample_count FROM voiceprints WHERE speaker_id = ?",
+            (speaker_id,),
+        ).fetchone()
+    return (row["embedding"], row["sample_count"]) if row else None
+
+
+def save_voiceprint(
+    speaker_id: str, embedding: bytes, dim: int, sample_count: int, source_transcript: str | None
+) -> None:
+    """Lưu/ghi đè centroid voiceprint của 1 người (1 hàng/người, id = vp-<speaker_id>)."""
+    with _connect() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO voiceprints
+               (id, speaker_id, embedding, dim, sample_count, source_transcript, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                f"vp-{speaker_id}", speaker_id, embedding, dim, sample_count,
+                source_transcript, datetime.now(UTC).astimezone().isoformat(),
+            ),
+        )
+
+
 def set_transcript_cluster(transcript_id: str, cluster: int, speaker_id: str | None) -> dict:
     """Gán cụm giọng local `cluster` của 1 transcript → speaker_id (hoặc None để
     bỏ gán). Trả speaker_map mới. Raise KeyError nếu transcript không tồn tại."""

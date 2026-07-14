@@ -92,6 +92,7 @@ function showScreen(name){
   $("tabbar").classList.toggle("hidden", !tabbed);
   // Đồng bộ trạng thái active cho cả tab bar (mobile) lẫn sidebar (laptop).
   document.querySelectorAll("[data-tab]").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  if (name === "settings"){ loadServerSettings(); loadSpeakerList(); }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("[data-tab]").forEach(t => t.onclick = () => {
@@ -358,7 +359,52 @@ async function assignCluster(spk){
     curSpeakerMap = j.speaker_map;
     SPK_NAMES = { ...SPK_NAMES, ...(j.speakers || {}) };
     renderSegments(curSegments);
+    // US-703: ghi nhớ giọng để tự nhận diện bản ghi sau.
+    const sid = curSpeakerMap[String(spk)];
+    if (sid && diarizeReady && confirm(`Ghi nhớ giọng "${SPK_NAMES[sid]}" để tự nhận diện lần sau?`))
+      await enrollCluster(sid, spk);
   } catch (e) { alert("Lỗi gán tên: " + e.message); }
+}
+async function enrollCluster(speakerId, spk){
+  try {
+    const r = await fetch(`/api/speakers/${speakerId}/enroll`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript_id: curDetailId, cluster: spk }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+  } catch (e) { alert("Lỗi ghi nhớ giọng: " + e.message); }
+}
+
+// ── Quản lý giọng đã lưu (Cài đặt) ─────────────────────────────────────────
+async function loadSpeakerList(){
+  const box = $("speakerList");
+  let arr = [];
+  try { arr = await (await fetch("/api/speakers")).json(); } catch { return; }
+  if (!arr.length){ box.innerHTML = '<small style="color:var(--faint)">Chưa có giọng nào được ghi nhớ.</small>'; return; }
+  box.innerHTML = "";
+  for (const s of arr){
+    const row = document.createElement("div"); row.className = "spk-row";
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = s.name;
+    const ct = document.createElement("span"); ct.className = "ct";
+    ct.textContent = s.voiceprints ? `${s.voiceprints} mẫu giọng` : "chưa có mẫu giọng";
+    const ren = document.createElement("button"); ren.className = "mini"; ren.textContent = "Đổi tên";
+    ren.onclick = () => renameSpeaker(s.id, s.name);
+    const del = document.createElement("button"); del.className = "mini"; del.textContent = "Xoá";
+    del.onclick = () => deleteSpeaker(s.id, s.name);
+    row.append(nm, ct, ren, del); box.appendChild(row);
+  }
+}
+async function renameSpeaker(id, cur){
+  const name = prompt("Đổi tên người:", cur);
+  if (!name || !name.trim()) return;
+  await fetch(`/api/speakers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+  loadSpeakerList();
+}
+async function deleteSpeaker(id, name){
+  if (!confirm(`Xoá giọng "${name}"? Các bản ghi đã gán sẽ trở về chưa đặt tên.`)) return;
+  await fetch(`/api/speakers/${id}`, { method: "DELETE" });
+  loadSpeakerList();
 }
 
 function downloadSub(fmt){

@@ -6,7 +6,7 @@
 - **Next Step**: Chạy `/plan-feature` cho hạng mục kế tiếp của Đợt 1 (xem PRD ưu tiên), hoặc `/audit-plan` để soát tiến độ vs BRD/PRD.
 
 ## Active Feature
-Đang build **Đợt 1** theo [PRD.md](../PRD.md). Chưa có plan-feature nào được tạo qua framework.
+**Speaker Layer** (branch `feat/speaker-layer`, từ `main`) — **Implemented** 2026-07-14. Plan: [docs/plan-speaker-layer.md](plan-speaker-layer.md). Diarization + nhận diện giọng (voiceprint) qua sherpa-onnx (offline, không token HF), giữ mlx-whisper. 4 PR: timestamp+SRT/VTT → diarize pass → đặt tên thủ công → voiceprint enroll+auto-ID. 59 test xanh (ruff+mypy). Files: `app/{diarize,subtitle}.py` (mới), `app/{engines,db,transcribe,main}.py`, `app/static/{app.js,index.html}`, `scripts/fetch_diarize_models.py`, `tests/test_{subtitle,diarize,speakers_api,voiceprint}.py`. Setting `diarize_enabled` mặc định off; model tải qua `uv run python scripts/fetch_diarize_models.py` (~33MB, gitignored). Còn lại: chưa merge vào main (cần review người); billing/credit-wallet branch tách riêng.
 
 ## Features Backlog
 Nguồn: [PRD.md](../PRD.md) §2 (FR-1..). Điền chi tiết khi chạy `/plan-feature`.

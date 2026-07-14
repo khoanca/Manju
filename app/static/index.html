@@ -205,6 +205,11 @@
   .spk-chip{ flex:0 0 auto; color:#fff; font-size:12px; font-weight:700; padding:1px 9px;
              border-radius:999px; border:none; cursor:pointer; white-space:nowrap; }
   .spk-chip:hover{ filter:brightness(1.08); }
+  .spk-list{ display:flex; flex-direction:column; gap:2px; }
+  .spk-row{ display:flex; align-items:center; gap:12px; padding:8px 2px; }
+  .spk-row .nm{ font-weight:600; flex:1 1 auto; }
+  .spk-row .ct{ color:var(--faint); font-size:12px; flex:0 0 auto; }
+  .spk-row .mini{ flex:0 0 auto; }
 
   /* upload */
   .drop{ border:2px dashed #d7dbe1; border-radius:18px; padding:34px 20px; text-align:center; color:var(--muted);
@@ -523,6 +528,11 @@
         <div class="set-main"><b>App Version</b></div>
         <div class="set-val">1.1.0</div>
       </div>
+    </div>
+
+    <div class="sec-label">Giọng đã lưu</div>
+    <div class="set-card">
+      <div id="speakerList" class="spk-list"><small style="color:var(--faint)">Chưa có giọng nào được ghi nhớ.</small></div>
     </div>
   </section>
 

@@ -188,8 +188,45 @@ def api_diarize(transcript_id: str, num_speakers: int = -1):
         raise HTTPException(422, "Không tách được giọng (audio quá ngắn hoặc chỉ 1 người)")
     labeled = diarize.assign_speakers(segments, spans)
     smap = diarize.initial_speaker_map(labeled)
+    vps = diarize.to_np_voiceprints(db.load_voiceprints())
+    smap = diarize.identify_clusters(audio, labeled, smap, vps)  # US-703: tự nhận diện
     db.update_speaker_layer(transcript_id, labeled, smap)
-    return {"segments": labeled, "speaker_map": smap, "num_speakers": len(smap)}
+    return {
+        "segments": labeled, "speaker_map": smap,
+        "num_speakers": len(smap), "speakers": db.speaker_names(),
+    }
+
+
+class EnrollIn(BaseModel):
+    transcript_id: str
+    cluster: int
+
+
+@app.post("/api/speakers/{speaker_id}/enroll")
+def api_enroll(speaker_id: str, body: EnrollIn):
+    """Ghi nhớ giọng: học voiceprint của 1 cụm trong 1 transcript cho speaker_id.
+    Gọi lại nhiều lần → gộp thêm mẫu (centroid cập nhật, US-703 AC3)."""
+    if not diarize.models_present():
+        raise HTTPException(503, "Chưa tải model diarization")
+    if speaker_id not in db.speaker_names():
+        raise HTTPException(404, "Không tìm thấy người")
+    data = transcribe.read_transcript(body.transcript_id)
+    if data is None or not data.get("segments"):
+        raise HTTPException(409, "Transcript không có segment đã tách giọng")
+    audio = transcribe.transcript_audio_path(body.transcript_id)
+    if audio is None:
+        raise HTTPException(409, "Không còn file ghi âm để học giọng")
+    spans = diarize.cluster_spans(data["segments"], body.cluster)
+    if not spans:
+        raise HTTPException(422, "Cụm giọng này không có đoạn nào trong bản ghi")
+    vec = diarize.embed_spans(audio, spans)
+    if vec is None:
+        raise HTTPException(422, "Đoạn giọng quá ngắn để học (cần ≥ ~0.5s)")
+    old = db.get_voiceprint(speaker_id)
+    old_vec = diarize.to_np_voiceprints([("_", old[0])])[0][1] if old else None
+    merged, count = diarize.merge_centroid(old_vec, old[1] if old else 0, vec)
+    db.save_voiceprint(speaker_id, merged.tobytes(), merged.size, count, body.transcript_id)
+    return {"ok": True, "sample_count": count}
 
 
 class ClusterAssign(BaseModel):

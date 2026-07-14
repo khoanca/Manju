@@ -12,15 +12,21 @@ import sys
 import threading
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = Path(os.environ.get("DIARIZE_MODEL_DIR", ROOT / "models"))
 SEG_MODEL = MODEL_DIR / "segmentation.onnx"
 EMB_MODEL = MODEL_DIR / "embedding.onnx"
 SAMPLE_RATE = 16000
 MIN_AUDIO_SEC = 3.0  # dưới ngưỡng: không đủ để tách giọng đáng tin
+MIN_SPAN_SEC = 0.5   # đoạn ngắn hơn: bỏ khi tính voiceprint
+# Ngưỡng cosine để coi 2 giọng là cùng người (CAM++ zh_en). Cao = ít nhận nhầm.
+MATCH_THRESHOLD = float(os.environ.get("DIARIZE_MATCH_THRESHOLD", "0.5"))
 
 _lock = threading.Lock()
 _diarizer = None
+_extractor = None
 
 
 def models_present() -> bool:
@@ -128,3 +134,108 @@ def initial_speaker_map(segments: list[dict]) -> dict:
     """{str(spk): None} cho mỗi cụm xuất hiện — chờ user/voiceprint gán tên."""
     clusters = sorted({s["spk"] for s in segments if s.get("spk") is not None})
     return {str(c): None for c in clusters}
+
+
+# ── Voiceprint: embedding + so khớp (US-703) ───────────────────────────────
+def _get_extractor():
+    global _extractor
+    with _lock:
+        if _extractor is None:
+            _link_onnxruntime()
+            import sherpa_onnx as so
+
+            _extractor = so.SpeakerEmbeddingExtractor(
+                so.SpeakerEmbeddingExtractorConfig(model=str(EMB_MODEL))
+            )
+        return _extractor
+
+
+def cluster_spans(segments: list[dict], spk: int) -> list[tuple[float, float]]:
+    """Các đoạn (start, end) thuộc cụm giọng `spk` trong 1 transcript."""
+    return [
+        (float(s["start"]), _seg_end(segments, i))
+        for i, s in enumerate(segments)
+        if s.get("spk") == spk
+    ]
+
+
+def _embed_samples(samples: np.ndarray, spans: list[tuple[float, float]]) -> np.ndarray | None:
+    """Embedding trung bình (L2-normalized) của các đoạn thuộc 1 giọng."""
+    ext = _get_extractor()
+    vecs: list[np.ndarray] = []
+    for a, b in spans:
+        seg = samples[int(a * SAMPLE_RATE) : int(b * SAMPLE_RATE)]
+        if seg.size < SAMPLE_RATE * MIN_SPAN_SEC:
+            continue
+        stream = ext.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, seg)
+        stream.input_finished()
+        if ext.is_ready(stream):
+            vecs.append(np.asarray(ext.compute(stream), dtype=np.float32))
+    if not vecs:
+        return None
+    mean = np.mean(vecs, axis=0)
+    norm = float(np.linalg.norm(mean))
+    return (mean / norm).astype(np.float32) if norm else None
+
+
+def embed_spans(audio_path: Path | str, spans: list[tuple[float, float]]) -> np.ndarray | None:
+    """Voiceprint (vector 192 chiều đã chuẩn hoá) của 1 giọng từ file + các đoạn.
+    None nếu thiếu model / không đủ audio hợp lệ."""
+    if not models_present() or not spans:
+        return None
+    from faster_whisper.audio import decode_audio
+
+    return _embed_samples(decode_audio(str(audio_path), sampling_rate=SAMPLE_RATE), spans)
+
+
+def to_np_voiceprints(raw: list[tuple[str, bytes]]) -> list[tuple[str, np.ndarray]]:
+    """DB bytes → vector numpy cho so khớp (giữ db.py không phụ thuộc numpy)."""
+    return [(sid, np.frombuffer(b, dtype=np.float32)) for sid, b in raw]
+
+
+def best_match(
+    vec: np.ndarray, voiceprints: list[tuple[str, np.ndarray]], threshold: float = MATCH_THRESHOLD
+) -> str | None:
+    """speaker_id có cosine cao nhất & ≥ ngưỡng (vector đã chuẩn hoá → dot = cosine)."""
+    best, best_score = None, -1.0
+    for sid, ref in voiceprints:
+        score = float(np.dot(vec, ref))
+        if score > best_score:
+            best_score, best = score, sid
+    return best if best_score >= threshold else None
+
+
+def merge_centroid(
+    old: np.ndarray | None, old_count: int, new: np.ndarray
+) -> tuple[np.ndarray, int]:
+    """Gộp mẫu voiceprint mới vào centroid cũ (bình quân theo số mẫu, chuẩn hoá lại)."""
+    if old is None or old_count <= 0:
+        return new, 1
+    combined = old * old_count + new
+    norm = float(np.linalg.norm(combined))
+    vec = (combined / norm).astype(np.float32) if norm else new
+    return vec, old_count + 1
+
+
+def identify_clusters(
+    audio_path: Path | str, segments: list[dict], speaker_map: dict,
+    voiceprints: list[tuple[str, np.ndarray]], threshold: float = MATCH_THRESHOLD,
+) -> dict:
+    """Tự điền speaker_map: mỗi cụm giọng → speaker_id nếu voiceprint khớp (US-703 AC2).
+    Chỉ điền ô đang None (không ghi đè tên user đã gán)."""
+    if not voiceprints:
+        return speaker_map
+    from faster_whisper.audio import decode_audio
+
+    samples = decode_audio(str(audio_path), sampling_rate=SAMPLE_RATE)
+    for spk in sorted({s["spk"] for s in segments if s.get("spk") is not None}):
+        if speaker_map.get(str(spk)) is not None:
+            continue
+        vec = _embed_samples(samples, cluster_spans(segments, spk))
+        if vec is None:
+            continue
+        sid = best_match(vec, voiceprints, threshold)
+        if sid:
+            speaker_map[str(spk)] = sid
+    return speaker_map

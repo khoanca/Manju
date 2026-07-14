@@ -95,6 +95,28 @@ def test_init_idempotent(tmp_db):
     assert db.speaker_names() == {}
 
 
+def test_voiceprint_save_get_load_roundtrip(tmp_db):
+    sid = db.find_or_create_speaker("An")
+    emb = b"\x00\x00\x80?" * 4  # 4 float32 = 1.0
+    db.save_voiceprint(sid, emb, 4, 2, "tid-1")
+    assert db.get_voiceprint(sid) == (emb, 2)
+    assert (sid, emb) in db.load_voiceprints()
+    # ghi đè (thêm mẫu) → 1 hàng/người, sample_count cập nhật
+    db.save_voiceprint(sid, emb, 4, 3, "tid-2")
+    assert db.get_voiceprint(sid) == (emb, 3)
+    assert len(db.load_voiceprints()) == 1
+    # list_speakers báo số voiceprint
+    assert db.list_speakers()[0]["voiceprints"] == 1
+
+
+def test_delete_speaker_removes_voiceprint(tmp_db):
+    sid = db.find_or_create_speaker("An")
+    db.save_voiceprint(sid, b"\x00\x00\x80?" * 4, 4, 1, None)
+    db.delete_speaker(sid)
+    assert db.get_voiceprint(sid) is None
+    assert db.load_voiceprints() == []
+
+
 def test_list_orders_newest_first(tmp_db):
     _insert(tid="20260101-000000-a")
     db.insert_transcript(db.TranscriptRecord(

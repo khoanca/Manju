@@ -1,7 +1,7 @@
 # Plan: Speaker Layer (diarization + nhận diện giọng)
 
 - **Source**: US-701..US-704 (net-new — chưa có trong product-plan; định nghĩa tại đây, đã duyệt Feature Preview 2026-07-14)
-- **Status**: In-Progress (PR1–PR3 xong)
+- **Status**: Implemented (PR1–PR4)
 - **Updated**: 2026-07-14
 - **Scout decision**: BUILD path — tích hợp `sherpa-onnx` (Apache-2.0, offline, KHÔNG token HF), giữ nguyên mlx-whisper. Xem lịch sử scout branch này.
 
@@ -52,10 +52,10 @@ Tách quan hệ để tên đổi được mà không phải rewrite segments:
 | T-006 | Align diarization ↔ segment whisper (max-overlap) → gán `spk`; pass 3 hook trong `_process` + job status `diarizing` + setting bật/tắt | US-701 AC1 | → T-004 | `app/transcribe.py`, `app/diarize.py` | [x] |
 | T-007 | Endpoints: `POST /api/transcripts/{id}/diarize` (run/re-run, cả recording live), CRUD `speakers`, `PUT speaker_map` (gán tên cụm) | US-702 AC1, US-701 | → T-006 | `app/main.py`, `app/db.py` | [x] |
 | T-008 | UI transcript: nhóm câu theo giọng, màu + `[mm:ss]`, dropdown gán/đổi tên, nút xuất SRT/VTT | US-701, US-702, US-704 | → T-007,T-003 | `app/static/app.js`, `index.html` | [x] |
-| T-009 | Embedding + match: `embed_cluster(wav,spans)->vec`, `match(vec)->speaker_id\|None` (cosine, ngưỡng cấu hình); auto-điền `speaker_map` khi diarize | US-703 AC2 | → T-006 | `app/diarize.py`, `app/db.py` | [ ] |
-| T-010 | Enroll: `POST /api/speakers/{id}/enroll` từ 1 transcript+cụm → lưu voiceprint; hỗ trợ thêm mẫu (centroid cập nhật) | US-703 AC1, AC3 | → T-009 | `app/main.py`, `app/db.py` | [ ] |
-| T-011 | UI: nút "ghi nhớ giọng" trên cụm đã đặt tên; trang **Quản lý giọng** (list/rename/xóa speaker+voiceprint) | US-703 | → T-010 | `app/static/app.js`, `index.html` | [ ] |
-| T-012 | Tests: unit align/cosine/SRT, diarize smoke (file mẫu 2 giọng), enroll→match round-trip, migration rollback, endpoint tests | US-701..704 (mọi AC) | → mỗi task land | `tests/` | [ ] |
+| T-009 | Embedding + match: `embed_cluster(wav,spans)->vec`, `match(vec)->speaker_id\|None` (cosine, ngưỡng cấu hình); auto-điền `speaker_map` khi diarize | US-703 AC2 | → T-006 | `app/diarize.py`, `app/db.py` | [x] |
+| T-010 | Enroll: `POST /api/speakers/{id}/enroll` từ 1 transcript+cụm → lưu voiceprint; hỗ trợ thêm mẫu (centroid cập nhật) | US-703 AC1, AC3 | → T-009 | `app/main.py`, `app/db.py` | [x] |
+| T-011 | UI: nút "ghi nhớ giọng" trên cụm đã đặt tên; trang **Quản lý giọng** (list/rename/xóa speaker+voiceprint) | US-703 | → T-010 | `app/static/app.js`, `index.html` | [x] |
+| T-012 | Tests: unit align/cosine/SRT, diarize smoke (file mẫu 2 giọng), enroll→match round-trip, migration rollback, endpoint tests | US-701..704 (mọi AC) | → mỗi task land | `tests/` | [x] |
 
 ## Stacked PRs (>400 LOC → chia nhỏ, mỗi PR ≤400, deploy độc lập)
 

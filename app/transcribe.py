@@ -172,7 +172,11 @@ def _maybe_diarize(
     if not spans:  # audio ngắn / 1 giọng
         return segments, None
     labeled = diarize.assign_speakers(segments, spans)
-    return labeled, diarize.initial_speaker_map(labeled)
+    smap = diarize.initial_speaker_map(labeled)
+    # US-703: tự gán tên cho cụm khớp voiceprint đã enroll.
+    vps = diarize.to_np_voiceprints(db.load_voiceprints())
+    smap = diarize.identify_clusters(audio_path, labeled, smap, vps)
+    return labeled, smap
 
 
 def _store_audio(transcript_id: str, audio_path: Path | None) -> tuple[str | None, Path]:
