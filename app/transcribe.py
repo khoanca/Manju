@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import db, engines
+from app import db, diarize, engines
 from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
@@ -51,6 +51,7 @@ class TranscriptDraft:
     raw_text: str | None = None
     segments: list[dict] | None = None
     audio_path: Path | None = None
+    speaker_map: dict | None = None  # pass 3: {cụm local: speaker_id | null}
 
 
 # ── Quản lý job (in-memory) ───────────────────────────────────────────────
@@ -126,6 +127,7 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         lambda text, p: _update(job_id, text=text, progress=p),
     )
     full_text, corrected = _maybe_correct(job_id, result.text, spec)
+    segments, speaker_map = _maybe_diarize(job_id, audio_path, result.segments)
     transcript_id = save_transcript(TranscriptDraft(
         original_name=spec.filename,
         language=spec.language,
@@ -133,7 +135,8 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         text=full_text,
         model_name=override or engine.info.model_name,
         raw_text=result.text if corrected and full_text != result.text else None,
-        segments=result.segments or None,
+        segments=segments or None,
+        speaker_map=speaker_map,
         # Giữ lại file upload gốc để nghe/tải lại (save_transcript sẽ dời đi).
         audio_path=audio_path,
     ))
@@ -148,6 +151,28 @@ def _maybe_correct(job_id: str, text: str, spec: JobSpec) -> tuple[str, bool]:
     return correct_text(
         text, glossary=spec.prompt, on_progress=lambda p: _update(job_id, progress=p)
     )
+
+
+def diarize_enabled() -> bool:
+    return db.get_setting("diarize_enabled") == "1"
+
+
+def _maybe_diarize(
+    job_id: str, audio_path: Path | None, segments: list[dict] | None
+) -> tuple[list[dict] | None, dict | None]:
+    """Pass 3: gán giọng cho từng segment. Never-fail — lỗi/thiếu model →
+    trả segment gốc, transcript vẫn lưu (US-701 AC2)."""
+    if not (segments and audio_path and diarize_enabled() and diarize.models_present()):
+        return segments, None
+    _update(job_id, status="diarizing", progress=0.0)
+    try:
+        spans = diarize.diarize_file(audio_path)
+    except Exception:  # noqa: BLE001 — pass 3 không được làm hỏng transcript
+        return segments, None
+    if not spans:  # audio ngắn / 1 giọng
+        return segments, None
+    labeled = diarize.assign_speakers(segments, spans)
+    return labeled, diarize.initial_speaker_map(labeled)
 
 
 def _store_audio(transcript_id: str, audio_path: Path | None) -> tuple[str | None, Path]:
@@ -185,6 +210,7 @@ def save_transcript(draft: TranscriptDraft) -> str:
         llm_model=llm_model_name() if draft.raw_text is not None else None,
         audio_file=audio_name,
         audio_dir=str(audio_dir) if audio_name else None,
+        speaker_map=draft.speaker_map,
     ))
     return transcript_id
 

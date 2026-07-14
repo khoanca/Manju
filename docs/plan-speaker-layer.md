@@ -1,7 +1,7 @@
 # Plan: Speaker Layer (diarization + nhận diện giọng)
 
 - **Source**: US-701..US-704 (net-new — chưa có trong product-plan; định nghĩa tại đây, đã duyệt Feature Preview 2026-07-14)
-- **Status**: In-Progress (PR1 xong)
+- **Status**: In-Progress (PR1+PR2 xong)
 - **Updated**: 2026-07-14
 - **Scout decision**: BUILD path — tích hợp `sherpa-onnx` (Apache-2.0, offline, KHÔNG token HF), giữ nguyên mlx-whisper. Xem lịch sử scout branch này.
 
@@ -47,9 +47,9 @@ Tách quan hệ để tên đổi được mà không phải rewrite segments:
 | T-001 | Thêm `end` vào segment `transcribe_file` (đã có sẵn từ mlx) + cập nhật shape `{start,end,text}`; giữ tương thích segment cũ (chỉ `start`) | US-701 AC1, US-704 AC1 | ‖ | `app/engines.py` | [x] |
 | T-002 | Migration: bảng `speakers`, `voiceprints`; cột `speaker_map` trên `transcripts` (additive `_ensure_columns`) + rollback | US-702 AC2, US-703 | ‖ | `app/db.py` | [x] |
 | T-003 | Export SRT/VTT từ segments+speaker_map (hàm thuần, không cần model) | US-704 AC1 | → T-001,T-002 | `app/subtitle.py` (mới), `app/main.py` | [x] |
-| T-004 | `app/diarize.py`: lazy singleton load sherpa-onnx; `diarize_file(wav,num_speakers=-1) -> list[{start,end,spk}]`; xử lý thiếu model/1 giọng | US-701 AC2 | → T-002 | `app/diarize.py` (mới) | [ ] |
-| T-005 | Script fetch model idempotent + config đường dẫn model trong settings | US-701 | ‖ với T-004 | `scripts/fetch_diarize_models.py` (mới), `app/db.py` settings | [ ] |
-| T-006 | Align diarization ↔ segment whisper (max-overlap) → gán `spk`; pass 3 hook trong `_process` + job status `diarizing` + setting bật/tắt | US-701 AC1 | → T-004 | `app/transcribe.py`, `app/diarize.py` | [ ] |
+| T-004 | `app/diarize.py`: lazy singleton load sherpa-onnx; `diarize_file(wav,num_speakers=-1) -> list[{start,end,spk}]`; xử lý thiếu model/1 giọng | US-701 AC2 | → T-002 | `app/diarize.py` (mới) | [x] |
+| T-005 | Script fetch model idempotent + config đường dẫn model trong settings | US-701 | ‖ với T-004 | `scripts/fetch_diarize_models.py` (mới), `app/db.py` settings | [x] |
+| T-006 | Align diarization ↔ segment whisper (max-overlap) → gán `spk`; pass 3 hook trong `_process` + job status `diarizing` + setting bật/tắt | US-701 AC1 | → T-004 | `app/transcribe.py`, `app/diarize.py` | [x] |
 | T-007 | Endpoints: `POST /api/transcripts/{id}/diarize` (run/re-run, cả recording live), CRUD `speakers`, `PUT speaker_map` (gán tên cụm) | US-702 AC1, US-701 | → T-006 | `app/main.py`, `app/db.py` | [ ] |
 | T-008 | UI transcript: nhóm câu theo giọng, màu + `[mm:ss]`, dropdown gán/đổi tên, nút xuất SRT/VTT | US-701, US-702, US-704 | → T-007,T-003 | `app/static/app.js`, `index.html` | [ ] |
 | T-009 | Embedding + match: `embed_cluster(wav,spans)->vec`, `match(vec)->speaker_id\|None` (cosine, ngưỡng cấu hình); auto-điền `speaker_map` khi diarize | US-703 AC2 | → T-006 | `app/diarize.py`, `app/db.py` | [ ] |

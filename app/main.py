@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import db, engines, live, org, subtitle, transcribe
+from app import db, diarize, engines, live, org, subtitle, transcribe
 
 
 @asynccontextmanager
@@ -84,6 +84,7 @@ def api_job(job_id: str):
 
 class SettingsIn(BaseModel):
     audio_dir: str | None = None
+    diarize_enabled: bool | None = None
 
 
 @app.get("/api/settings")
@@ -93,6 +94,10 @@ def api_settings():
         "audio_dir": str(db.get_audio_dir()),
         "engine": {"tier": info.tier, "model": info.model_name},
         "max_live_sessions": live.MAX_LIVE_SESSIONS,
+        "diarize": {
+            "enabled": transcribe.diarize_enabled(),
+            "models_present": diarize.models_present(),
+        },
     }
 
 
@@ -103,7 +108,12 @@ def api_settings_put(body: SettingsIn):
             db.set_audio_dir(body.audio_dir)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-    return {"audio_dir": str(db.get_audio_dir())}
+    if body.diarize_enabled is not None:
+        db.set_setting("diarize_enabled", "1" if body.diarize_enabled else "0")
+    return {
+        "audio_dir": str(db.get_audio_dir()),
+        "diarize_enabled": transcribe.diarize_enabled(),
+    }
 
 
 @app.get("/api/transcripts")
