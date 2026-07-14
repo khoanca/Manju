@@ -167,6 +167,72 @@ def api_transcript_audio(transcript_id: str):
     return FileResponse(path, filename=path.name)
 
 
+# ── Lớp speaker: tách giọng lại + gán tên cụm + quản lý người ──────────────
+@app.post("/api/transcripts/{transcript_id}/diarize")
+def api_diarize(transcript_id: str, num_speakers: int = -1):
+    """Chạy/chạy lại pass 3 trên file ghi âm đã lưu (kể cả recording live).
+    Ghi đè speaker_map cũ (UI cảnh báo trước khi gọi)."""
+    if not diarize.models_present():
+        raise HTTPException(503, "Chưa tải model diarization (scripts/fetch_diarize_models.py)")
+    data = transcribe.read_transcript(transcript_id)
+    if data is None:
+        raise HTTPException(404, "Không tìm thấy transcript")
+    segments = data.get("segments")
+    if not segments:
+        raise HTTPException(409, "Transcript không có timestamp/segment để tách giọng")
+    audio = transcribe.transcript_audio_path(transcript_id)
+    if audio is None:
+        raise HTTPException(409, "Không còn file ghi âm để tách giọng")
+    spans = diarize.diarize_file(audio, num_speakers)
+    if not spans:
+        raise HTTPException(422, "Không tách được giọng (audio quá ngắn hoặc chỉ 1 người)")
+    labeled = diarize.assign_speakers(segments, spans)
+    smap = diarize.initial_speaker_map(labeled)
+    db.update_speaker_layer(transcript_id, labeled, smap)
+    return {"segments": labeled, "speaker_map": smap, "num_speakers": len(smap)}
+
+
+class ClusterAssign(BaseModel):
+    cluster: int
+    name: str | None = None        # tên → tìm/tạo speaker
+    speaker_id: str | None = None  # hoặc gán id sẵn có; cả hai None = bỏ gán cụm
+
+
+@app.put("/api/transcripts/{transcript_id}/speaker-map")
+def api_assign_cluster(transcript_id: str, body: ClusterAssign):
+    sid = body.speaker_id
+    if body.name and body.name.strip():
+        sid = db.find_or_create_speaker(body.name)
+    try:
+        smap = db.set_transcript_cluster(transcript_id, body.cluster, sid)
+    except KeyError as exc:
+        raise HTTPException(404, "Không tìm thấy transcript") from exc
+    return {"speaker_map": smap, "speakers": db.speaker_names()}
+
+
+@app.get("/api/speakers")
+def api_speakers():
+    return db.list_speakers()
+
+
+class SpeakerIn(BaseModel):
+    name: str
+
+
+@app.patch("/api/speakers/{speaker_id}")
+def api_rename_speaker(speaker_id: str, body: SpeakerIn):
+    if not body.name.strip():
+        raise HTTPException(400, "Tên rỗng")
+    db.rename_speaker(speaker_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/speakers/{speaker_id}")
+def api_delete_speaker(speaker_id: str):
+    db.delete_speaker(speaker_id)
+    return {"ok": True}
+
+
 # ── Đợt 2: đẩy TEXT bản ghi lên org cloud (không audio) ────────────────────
 class PushIn(BaseModel):
     org_id: str

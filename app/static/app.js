@@ -42,13 +42,33 @@ $("swLocalAudio").onclick = () => {
 };
 
 // ── Settings phía server (engine, thư mục audio) ───────────────────────────
+let diarizeReady = false;  // model đã tải chưa → cho phép bật pass 3
 async function loadServerSettings(){
   try {
     const s = await (await fetch("/api/settings")).json();
     $("engineVal").textContent = s.engine.model;
     $("audioDir").value = s.audio_dir;
+    const d = s.diarize || {};
+    diarizeReady = !!d.models_present;
+    $("swDiarize").classList.toggle("on", !!d.enabled);
+    $("diarizeHint").textContent = diarizeReady
+      ? 'Pass 3 — tách "ai nói câu nào" trong bản ghi mới'
+      : "Chưa tải model — chạy: uv run python scripts/fetch_diarize_models.py";
   } catch { $("engineVal").textContent = "—"; }
 }
+$("swDiarize").onclick = async () => {
+  if (!diarizeReady && !$("swDiarize").classList.contains("on")){
+    alert("Chưa tải model. Chạy: uv run python scripts/fetch_diarize_models.py rồi tải lại trang.");
+    return;
+  }
+  const on = $("swDiarize").classList.toggle("on");
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ diarize_enabled: on }),
+    });
+  } catch { $("swDiarize").classList.toggle("on"); }
+};
 $("saveAudioDir").onclick = async () => {
   const msg = $("audioDirMsg");
   try {
@@ -260,11 +280,30 @@ async function showAudio(id, hasServerAudio){
     } catch {} // file đã bị trình duyệt dọn (iOS xoá storage sau ~7 ngày không dùng)
   }
 }
-function setResult(text, raw, segments, id, hasServerAudio){
+// ── Lớp speaker (nhãn giọng, gán tên, phụ đề) ──────────────────────────────
+let SPK_NAMES = {};        // speaker_id → tên
+let curSegments = null, curSpeakerMap = {}, curDetailId = null;
+const SPK_COLORS = ["#7c6cf0","#e0698a","#3fa7d6","#f2a154","#4caf88","#b57edc","#d9534f","#5b7fbd"];
+const spkColor = (spk) => SPK_COLORS[((spk % SPK_COLORS.length) + SPK_COLORS.length) % SPK_COLORS.length];
+async function loadSpeakers(){
+  try { const arr = await (await fetch("/api/speakers")).json();
+    SPK_NAMES = {}; for (const s of arr) SPK_NAMES[s.id] = s.name;
+  } catch { /* giữ nguyên */ }
+}
+function clusterLabel(spk){
+  const sid = curSpeakerMap[String(spk)];
+  if (sid && SPK_NAMES[sid]) return SPK_NAMES[sid];      // đã gán / voiceprint khớp
+  const order = Object.keys(curSpeakerMap).map(Number).sort((a,b)=>a-b);
+  const idx = order.indexOf(Number(spk));               // Unknown → "Người N" theo thứ tự cụm
+  return "Người " + (idx >= 0 ? idx + 1 : spk + 1);
+}
+
+function setResult(text, raw, segments, id, hasServerAudio, speakerMap){
   fixedText = text; rawText = raw || null; showingRaw = false;
   $("result").value = text;
   $("toggleRaw").style.display = rawText ? "" : "none";
   $("toggleRaw").textContent = "Bản gốc";
+  curSegments = segments; curSpeakerMap = speakerMap || {}; curDetailId = id;
   renderSegments(segments);
   showAudio(id, hasServerAudio);
 }
@@ -272,23 +311,81 @@ async function openDetail(m){
   showScreen("detail");
   $("detTitle").textContent = m.title || "Bản ghi";
   downloadName = (m.title || m.id).replace(/\.[^.]+$/, "") + ".txt";
-  setResult("Đang tải…", null, null, null, false);
+  setResult("Đang tải…", null, null, null, false, null);
+  await loadSpeakers();
   const d = await (await fetch("/api/transcripts/" + m.id)).json();
-  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio);
+  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map);
 }
 $("toggleRaw").onclick = () => { showingRaw = !showingRaw; $("result").value = showingRaw ? rawText : fixedText; $("toggleRaw").textContent = showingRaw ? "Bản sửa" : "Bản gốc"; };
 function renderSegments(segments){
   const box = $("segList"), btn = $("toggleSegs"); box.innerHTML = "";
-  if (!segments || !segments.length){ box.style.display = "none"; btn.style.display = "none"; return; }
+  const hasSegs = !!(segments && segments.length);
+  const hasSpk = hasSegs && segments.some(s => s.spk !== undefined);
+  // Nút tách giọng: hiện khi có segment + có file audio server để chạy lại pass 3
+  $("diarizeBtn").style.display = (hasSegs && curDetailId && !$("audioWrap").classList.contains("hidden")) || hasSpk ? "" : "none";
+  $("diarizeBtn").textContent = hasSpk ? "Tách lại" : "Tách giọng";
+  $("dlSrt").style.display = $("dlVtt").style.display = hasSegs ? "" : "none";
+  if (!hasSegs){ box.style.display = "none"; btn.style.display = "none"; return; }
   for (const s of segments){
     const p = document.createElement("p"); p.className = "seg";
     const t = document.createElement("time"); t.textContent = fmtTime(s.start);
+    p.append(t);
+    if (s.spk !== undefined){
+      const chip = document.createElement("button");
+      chip.className = "spk-chip"; chip.style.background = spkColor(s.spk);
+      chip.textContent = clusterLabel(s.spk); chip.title = "Bấm để đặt tên";
+      chip.onclick = () => assignCluster(s.spk);
+      p.append(chip);
+    }
     const span = document.createElement("span"); span.textContent = s.text;
-    p.append(t, span); box.appendChild(p);
+    p.append(span); box.appendChild(p);
   }
   box.style.display = "none"; btn.style.display = ""; btn.textContent = "Mốc thời gian";
 }
 $("toggleSegs").onclick = () => { const h = $("segList").style.display === "none"; $("segList").style.display = h ? "" : "none"; $("toggleSegs").textContent = h ? "Ẩn mốc" : "Mốc thời gian"; };
+
+async function assignCluster(spk){
+  const cur = SPK_NAMES[curSpeakerMap[String(spk)]] || "";
+  const name = prompt("Tên người cho giọng này (để trống = bỏ gán):", cur);
+  if (name === null) return;
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/speaker-map`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cluster: spk, name: name.trim() }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    curSpeakerMap = j.speaker_map;
+    SPK_NAMES = { ...SPK_NAMES, ...(j.speakers || {}) };
+    renderSegments(curSegments);
+  } catch (e) { alert("Lỗi gán tên: " + e.message); }
+}
+
+function downloadSub(fmt){
+  if (!curDetailId) return;
+  const a = document.createElement("a");
+  a.href = `/api/transcripts/${curDetailId}/subtitle?format=${fmt}`;
+  a.download = downloadName.replace(/\.txt$/, "." + fmt);
+  a.click();
+}
+$("dlSrt").onclick = () => downloadSub("srt");
+$("dlVtt").onclick = () => downloadSub("vtt");
+
+$("diarizeBtn").onclick = async () => {
+  if (!curDetailId) return;
+  const named = Object.values(curSpeakerMap).some(v => v);
+  if (named && !confirm("Tách giọng lại sẽ xoá các tên đã gán cho bản ghi này. Tiếp tục?")) return;
+  const b = $("diarizeBtn"); b.disabled = true; const old = b.textContent; b.textContent = "Đang tách…";
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/diarize`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    curSegments = j.segments; curSpeakerMap = j.speaker_map;
+    renderSegments(curSegments);
+    $("segList").style.display = ""; $("toggleSegs").textContent = "Ẩn mốc";
+  } catch (e) { alert("Lỗi tách giọng: " + e.message); }
+  finally { b.disabled = false; b.textContent = old; }
+};
 $("copy").onclick = () => { navigator.clipboard.writeText($("result").value); $("copy").textContent = "Đã copy!"; setTimeout(()=>$("copy").textContent="Copy",1200); };
 $("download").onclick = () => { const b = new Blob([$("result").value],{type:"text/plain"}); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = downloadName; a.click(); };
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -220,6 +222,76 @@ def speaker_names() -> dict[str, str]:
     with _connect() as conn:
         rows = conn.execute("SELECT id, name FROM speakers").fetchall()
     return {r["id"]: r["name"] for r in rows}
+
+
+def list_speakers() -> list[dict]:
+    """Người có tên + số voiceprint đã enroll (cho trang Quản lý giọng)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT s.id, s.name, s.created_at, COUNT(v.id) AS voiceprints
+               FROM speakers s LEFT JOIN voiceprints v ON v.speaker_id = s.id
+               GROUP BY s.id ORDER BY s.name COLLATE NOCASE"""
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_or_create_speaker(name: str) -> str:
+    """Tìm speaker theo tên (không phân biệt hoa/thường) hoặc tạo mới. Trả id."""
+    name = name.strip()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM speakers WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+        if row:
+            return row["id"]
+        sid = f"spk-{uuid.uuid4().hex[:12]}"
+        conn.execute(
+            "INSERT INTO speakers (id, name, created_at) VALUES (?, ?, ?)",
+            (sid, name, datetime.now(UTC).astimezone().isoformat()),
+        )
+        return sid
+
+
+def rename_speaker(speaker_id: str, name: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE speakers SET name = ? WHERE id = ?", (name.strip(), speaker_id))
+
+
+def delete_speaker(speaker_id: str) -> None:
+    """Xóa người + voiceprint; gỡ tham chiếu khỏi mọi speaker_map (không xóa câu)."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM voiceprints WHERE speaker_id = ?", (speaker_id,))
+        conn.execute("DELETE FROM speakers WHERE id = ?", (speaker_id,))
+        rows = conn.execute(
+            "SELECT id, speaker_map FROM transcripts WHERE speaker_map LIKE ?",
+            (f"%{speaker_id}%",),
+        ).fetchall()
+        for r in rows:
+            smap = json.loads(r["speaker_map"])
+            changed = {k: (None if v == speaker_id else v) for k, v in smap.items()}
+            if changed != smap:
+                conn.execute(
+                    "UPDATE transcripts SET speaker_map = ? WHERE id = ?",
+                    (json.dumps(changed, ensure_ascii=False), r["id"]),
+                )
+
+
+def set_transcript_cluster(transcript_id: str, cluster: int, speaker_id: str | None) -> dict:
+    """Gán cụm giọng local `cluster` của 1 transcript → speaker_id (hoặc None để
+    bỏ gán). Trả speaker_map mới. Raise KeyError nếu transcript không tồn tại."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT speaker_map FROM transcripts WHERE id = ?", (transcript_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(transcript_id)
+        smap = json.loads(row["speaker_map"]) if row["speaker_map"] else {}
+        smap[str(cluster)] = speaker_id
+        conn.execute(
+            "UPDATE transcripts SET speaker_map = ? WHERE id = ?",
+            (json.dumps(smap, ensure_ascii=False), transcript_id),
+        )
+    return smap
 
 
 # ── Settings ───────────────────────────────────────────────────────────────

@@ -200,8 +200,11 @@
   #result{ width:100%; border:none; background:var(--card-2); border-radius:14px; padding:14px;
            min-height:230px; font-size:15px; line-height:1.7; resize:vertical; outline:none; }
   .segs{ margin-top:14px; border-top:1px solid var(--line); padding-top:14px; max-height:320px; overflow-y:auto; }
-  .segs .seg{ display:flex; gap:12px; margin:0 0 8px; font-size:14px; }
+  .segs .seg{ display:flex; gap:12px; margin:0 0 8px; font-size:14px; align-items:baseline; }
   .segs .seg time{ color:var(--accent); font-variant-numeric:tabular-nums; flex:0 0 auto; font-weight:700; }
+  .spk-chip{ flex:0 0 auto; color:#fff; font-size:12px; font-weight:700; padding:1px 9px;
+             border-radius:999px; border:none; cursor:pointer; white-space:nowrap; }
+  .spk-chip:hover{ filter:brightness(1.08); }
 
   /* upload */
   .drop{ border:2px dashed #d7dbe1; border-radius:18px; padding:34px 20px; text-align:center; color:var(--muted);
@@ -484,6 +487,11 @@
         <div class="sw on" id="swCorrect"></div>
         <input type="checkbox" id="correct" checked class="hidden" />
       </div>
+      <div class="set-row" id="rowDiarize">
+        <div class="set-ico">🗣️</div>
+        <div class="set-main"><b>Nhận diện người nói</b><small id="diarizeHint">Pass 3 — tách "ai nói câu nào" (cần tải model)</small></div>
+        <div class="sw" id="swDiarize"></div>
+      </div>
     </div>
 
     <div class="sec-label">Thuật ngữ / ngữ cảnh</div>
@@ -546,6 +554,9 @@
       <div class="det-actions">
         <button class="mini" id="toggleSegs" style="display:none">Mốc thời gian</button>
         <button class="mini" id="toggleRaw" style="display:none">Bản gốc</button>
+        <button class="mini" id="diarizeBtn" style="display:none">Tách giọng</button>
+        <button class="mini" id="dlSrt" style="display:none">SRT</button>
+        <button class="mini" id="dlVtt" style="display:none">VTT</button>
         <button class="mini" id="copy">Copy</button>
         <button class="mini pri" id="download">Tải .txt</button>
       </div>
