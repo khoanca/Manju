@@ -1,4 +1,4 @@
-// Client Wavelogs — tách từ index.html. Gồm: router màn hình, lịch sử,
+// Client Manju — tách từ index.html. Gồm: router màn hình, lịch sử,
 // upload, live (mic → WS, có buffer + tự nối lại), settings (localStorage +
 // server), wake lock, PWA, OPFS cho client mỏng (PRD FR-4).
 const $ = (id) => document.getElementById(id);
@@ -85,6 +85,25 @@ $("sideUpload").onclick = () => { if (!live) showScreen("upload"); };
 $("searchBtn").onclick = () => { const b = $("searchBox"); b.classList.toggle("hidden"); if (!b.classList.contains("hidden")) $("searchInput").focus(); else { $("searchInput").value=""; renderHistory(); } };
 $("searchInput").oninput = renderHistory;
 
+// ── Lọc & sắp xếp bản ghi ──────────────────────────────────────────────────
+const FILTER_IDS = ["sortBy", "fDateFrom", "fDateTo", "fTimeFrom", "fTimeTo", "fDurMin", "fDurMax"];
+$("filterBtn").onclick = () => {
+  const p = $("filters");
+  const open = p.classList.toggle("hidden") === false;
+  $("filterBtn").classList.toggle("on", open || filtersActive());
+};
+FILTER_IDS.forEach(id => $(id).addEventListener("input", renderHistory));
+$("fClear").onclick = () => {
+  ["fDateFrom", "fDateTo", "fTimeFrom", "fTimeTo", "fDurMin", "fDurMax"].forEach(id => $(id).value = "");
+  $("sortBy").value = "date-desc";
+  renderHistory();
+};
+// Có bất kỳ điều kiện lọc nào đang bật (không tính sắp xếp) → highlight nút.
+function filtersActive(){
+  return ["fDateFrom", "fDateTo", "fTimeFrom", "fTimeTo", "fDurMin", "fDurMax"]
+    .some(id => $(id).value) || !!($("searchInput").value || "").trim();
+}
+
 // ── Settings toggle (checkbox mirror) ──────────────────────────────────────
 $("swCorrect").onclick = () => {
   const on = $("swCorrect").classList.toggle("on");
@@ -103,13 +122,51 @@ const nfmt = (n) => (n||0).toLocaleString("en-US");
 // ── History ────────────────────────────────────────────────────────────────
 let ALL = [];
 async function loadHistory(){ ALL = await (await fetch("/api/transcripts")).json(); renderHistory(); }
+
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const SORTERS = {
+  "date-desc": (a, b) => cmpStr(b.created_at, a.created_at),   // created_at là ISO → so chuỗi = so thời gian
+  "date-asc":  (a, b) => cmpStr(a.created_at, b.created_at),
+  "title-asc": (a, b) => (a.title || "").localeCompare(b.title || "", "vi"),
+  "title-desc":(a, b) => (b.title || "").localeCompare(a.title || "", "vi"),
+  "dur-desc":  (a, b) => (b.duration || 0) - (a.duration || 0),
+  "dur-asc":   (a, b) => (a.duration || 0) - (b.duration || 0),
+};
+const localYMD = (d) => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const localHM  = (d) => pad(d.getHours()) + ":" + pad(d.getMinutes());
+
+// Lọc theo tên + khoảng ngày + khoảng giờ trong ngày + khoảng thời lượng, rồi sắp xếp.
+function filterSortHistory(){
+  const q = ($("searchInput").value || "").trim().toLowerCase();
+  const dFrom = $("fDateFrom").value, dTo = $("fDateTo").value;   // "YYYY-MM-DD" | ""
+  const tFrom = $("fTimeFrom").value, tTo = $("fTimeTo").value;   // "HH:MM" | ""
+  const durMin = parseFloat($("fDurMin").value), durMax = parseFloat($("fDurMax").value);
+  const out = ALL.filter(m => {
+    if (q && !(m.title || "").toLowerCase().includes(q)) return false;
+    const dt = new Date(m.created_at);
+    if (!isNaN(dt)){
+      const ymd = localYMD(dt), hm = localHM(dt);
+      if (dFrom && ymd < dFrom) return false;
+      if (dTo   && ymd > dTo)   return false;
+      if (tFrom && hm  < tFrom) return false;
+      if (tTo   && hm  > tTo)   return false;
+    }
+    const mins = (m.duration || 0) / 60;
+    if (!isNaN(durMin) && mins < durMin) return false;
+    if (!isNaN(durMax) && mins > durMax) return false;
+    return true;
+  });
+  return out.sort(SORTERS[$("sortBy").value] || SORTERS["date-desc"]);
+}
+
 function renderHistory(){
   const box = $("history");
-  const q = ($("searchInput").value || "").trim().toLowerCase();
-  const items = q ? ALL.filter(m => (m.title||"").toLowerCase().includes(q)) : ALL;
+  const items = filterSortHistory();
+  const active = filtersActive();
+  $("filterBtn").classList.toggle("on", active || !$("filters").classList.contains("hidden"));
   box.innerHTML = "";
   if (!items.length){
-    box.innerHTML = `<div class="empty"><span class="big">🎙️</span><b>${q ? "Không tìm thấy" : "Chưa có bản ghi nào"}</b>${q ? "" : "Bấm nút micro để ghi, hoặc ＋ để tải file lên."}</div>`;
+    box.innerHTML = `<div class="empty"><span class="big">🎙️</span><b>${active ? "Không tìm thấy" : "Chưa có bản ghi nào"}</b>${active ? "" : "Bấm nút micro để ghi, hoặc ＋ để tải file lên."}</div>`;
     return;
   }
   const opfs = opfsMap();
