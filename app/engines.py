@@ -34,7 +34,7 @@ class EngineInfo:
 class FileResult:
     text: str
     duration: float
-    segments: list[dict]  # [{start, text}] — cùng shape với segments của live
+    segments: list[dict]  # [{start, end, text}] — cùng shape với segments của live
 
 
 @dataclass(frozen=True)
@@ -135,7 +135,11 @@ class MlxEngine(Engine):
         with _decode_lock:
             result = self._transcribe(str(path), spec, final=True)
         segs = [
-            {"start": round(float(seg["start"]), 2), "text": seg["text"].strip()}
+            {
+                "start": round(float(seg["start"]), 2),
+                "end": round(float(seg["end"]), 2),
+                "text": seg["text"].strip(),
+            }
             for seg in result["segments"]
             if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
         ]
@@ -220,7 +224,13 @@ class FwEngine(Engine):
         segs: list[dict] = []
         for seg in segments:
             parts.append(seg.text)
-            segs.append({"start": round(float(seg.start), 2), "text": seg.text.strip()})
+            segs.append(
+                {
+                    "start": round(float(seg.start), 2),
+                    "end": round(float(seg.end), 2),
+                    "text": seg.text.strip(),
+                }
+            )
             progress = min(seg.end / duration, 0.99) if duration else 0.0
             on_progress("".join(parts).strip(), progress)
         return FileResult("".join(parts).strip(), duration, segs)

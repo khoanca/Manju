@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   corrected  INTEGER DEFAULT 0,
   llm_model  TEXT,
   audio_file TEXT,
-  audio_dir  TEXT
+  audio_dir  TEXT,
+  speaker_map TEXT  -- JSON {"<local_cluster_idx>": speaker_id | null} (lớp speaker)
 );
 CREATE INDEX IF NOT EXISTS idx_t_created ON transcripts(created_at DESC);
 
@@ -46,6 +47,24 @@ CREATE TABLE IF NOT EXISTS sync_state (
   pushed_at TEXT,
   status    TEXT DEFAULT 'pending'
 );
+
+-- Lớp speaker: người có tên (global) + voiceprint để nhận diện bản ghi mới.
+CREATE TABLE IF NOT EXISTS speakers (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voiceprints (
+  id                TEXT PRIMARY KEY,
+  speaker_id        TEXT NOT NULL REFERENCES speakers(id),
+  embedding         BLOB NOT NULL,   -- float32 centroid, dài = dim
+  dim               INTEGER NOT NULL,
+  sample_count      INTEGER NOT NULL DEFAULT 1,
+  source_transcript TEXT,
+  created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vp_speaker ON voiceprints(speaker_id);
 """
 
 
@@ -61,6 +80,15 @@ def _connect() -> sqlite3.Connection:
 def init() -> None:
     with _connect() as conn:
         conn.executescript(_SCHEMA)
+        _ensure_columns(conn)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Migration additive cho DB đã tồn tại: CREATE TABLE IF NOT EXISTS không
+    thêm cột mới vào bảng cũ → tự ALTER khi thiếu (idempotent)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(transcripts)")}
+    if "speaker_map" not in cols:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN speaker_map TEXT")
 
 
 # ── Transcripts ────────────────────────────────────────────────────────────
@@ -80,6 +108,7 @@ class TranscriptRecord:
     llm_model: str | None
     audio_file: str | None
     audio_dir: str | None
+    speaker_map: dict | None = None  # {local_cluster_idx: speaker_id | null} (lớp speaker)
 
 
 def insert_transcript(rec: TranscriptRecord) -> None:
@@ -87,14 +116,16 @@ def insert_transcript(rec: TranscriptRecord) -> None:
         conn.execute(
             """INSERT OR REPLACE INTO transcripts
                (id, title, language, model, duration, created_at, text, raw_text,
-                segments, chars, words, corrected, llm_model, audio_file, audio_dir)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                segments, chars, words, corrected, llm_model, audio_file, audio_dir,
+                speaker_map)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 rec.transcript_id, rec.title, rec.language, rec.model,
                 round(rec.duration, 1), rec.created_at, rec.text, rec.raw_text,
                 json.dumps(rec.segments, ensure_ascii=False) if rec.segments else None,
                 len(rec.text), len(rec.text.split()), int(rec.raw_text is not None),
                 rec.llm_model, rec.audio_file, rec.audio_dir,
+                json.dumps(rec.speaker_map, ensure_ascii=False) if rec.speaker_map else None,
             ),
         )
 
@@ -145,7 +176,30 @@ def read_transcript(transcript_id: str) -> dict | None:
             data["segments"] = json.loads(row["segments"])
         except Exception:  # noqa: BLE001
             pass
+    if row["speaker_map"] is not None:
+        try:
+            data["speaker_map"] = json.loads(row["speaker_map"])
+        except Exception:  # noqa: BLE001
+            pass
     return data
+
+
+def update_speaker_layer(
+    transcript_id: str,
+    segments: list[dict] | None,
+    speaker_map: dict | None,
+) -> None:
+    """Ghi lại kết quả pass 3 (segment có `spk` + ánh xạ cụm→người) cho 1
+    transcript đã tồn tại — dùng cho diarize/re-run và gán tên thủ công."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE transcripts SET segments = ?, speaker_map = ? WHERE id = ?",
+            (
+                json.dumps(segments, ensure_ascii=False) if segments else None,
+                json.dumps(speaker_map, ensure_ascii=False) if speaker_map else None,
+                transcript_id,
+            ),
+        )
 
 
 def transcript_audio_path(transcript_id: str) -> Path | None:
@@ -158,6 +212,14 @@ def transcript_audio_path(transcript_id: str) -> Path | None:
         return None
     p = Path(row["audio_dir"] or DEFAULT_RECORDINGS) / row["audio_file"]
     return p if p.exists() else None
+
+
+# ── Speakers (lớp speaker — tên hiển thị cho nhãn/phụ đề) ──────────────────
+def speaker_names() -> dict[str, str]:
+    """Map speaker_id → tên. Rỗng cho tới khi user gán tên (PR3)."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT id, name FROM speakers").fetchall()
+    return {r["id"]: r["name"] for r in rows}
 
 
 # ── Settings ───────────────────────────────────────────────────────────────

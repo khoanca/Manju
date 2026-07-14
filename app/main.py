@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile, WebSocket
+from fastapi import FastAPI, Form, HTTPException, Response, UploadFile, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import db, engines, live, org, transcribe
+from app import db, engines, live, org, subtitle, transcribe
 
 
 @asynccontextmanager
@@ -117,6 +117,35 @@ def api_transcript(transcript_id: str):
     if data is None:
         raise HTTPException(404, "Không tìm thấy transcript")
     return JSONResponse(data)
+
+
+def _speaker_labels(speaker_map: dict | None) -> dict[int, str]:
+    """{local_cluster_idx: speaker_id} + bảng speakers → {idx: tên} cho phụ đề."""
+    if not speaker_map:
+        return {}
+    names = db.speaker_names()
+    return {int(k): names[v] for k, v in speaker_map.items() if v and v in names}
+
+
+@app.get("/api/transcripts/{transcript_id}/subtitle")
+def api_subtitle(transcript_id: str, format: str = "srt"):
+    if format not in ("srt", "vtt"):
+        raise HTTPException(400, "format phải là 'srt' hoặc 'vtt'")
+    data = transcribe.read_transcript(transcript_id)
+    if data is None:
+        raise HTTPException(404, "Không tìm thấy transcript")
+    segments = data.get("segments")
+    if not segments:
+        raise HTTPException(409, "Transcript chưa có timestamp/segment để xuất phụ đề")
+    text = subtitle.render(
+        segments, _speaker_labels(data.get("speaker_map")), vtt=(format == "vtt")
+    )
+    media = "text/vtt" if format == "vtt" else "application/x-subrip"
+    return Response(
+        text,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{transcript_id}.{format}"'},
+    )
 
 
 @app.get("/api/transcripts/{transcript_id}/audio")

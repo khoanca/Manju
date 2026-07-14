@@ -47,6 +47,54 @@ def test_read_missing_returns_none(tmp_db):
     assert db.read_transcript("khong-ton-tai") is None
 
 
+def test_speaker_map_roundtrip(tmp_db):
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="20260101-000000-spk", title="Họp", language="vi", model="m",
+        duration=5.0, created_at="2026-01-01T00:00:00+07:00", text="a b",
+        raw_text=None,
+        segments=[{"start": 0.0, "end": 2.0, "text": "a", "spk": 0},
+                  {"start": 2.0, "end": 4.0, "text": "b", "spk": 1}],
+        llm_model=None, audio_file=None, audio_dir=None,
+        speaker_map={"0": "spk-an", "1": None},
+    ))
+    row = db.read_transcript("20260101-000000-spk")
+    assert row["speaker_map"] == {"0": "spk-an", "1": None}
+    assert row["segments"][0]["spk"] == 0
+
+
+def test_update_speaker_layer_overwrites(tmp_db):
+    _insert()
+    db.update_speaker_layer(
+        "20260101-000000-hop",
+        [{"start": 0.0, "end": 1.0, "text": "triển khai Kubernetes", "spk": 0}],
+        {"0": "spk-x"},
+    )
+    row = db.read_transcript("20260101-000000-hop")
+    assert row["speaker_map"] == {"0": "spk-x"}
+    assert row["segments"][0]["spk"] == 0
+
+
+def test_ensure_columns_adds_speaker_map_to_legacy_db(tmp_db):
+    """DB cũ (transcripts thiếu speaker_map) → _ensure_columns tự ALTER thêm cột."""
+    import sqlite3
+    conn = sqlite3.connect(db.DB_PATH)
+    conn.execute("ALTER TABLE transcripts DROP COLUMN speaker_map")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(transcripts)")}
+    assert "speaker_map" not in cols
+    conn.close()
+
+    db.init()  # phải thêm lại cột, không lỗi
+    with sqlite3.connect(db.DB_PATH) as c2:
+        cols2 = {r[1] for r in c2.execute("PRAGMA table_info(transcripts)")}
+    assert "speaker_map" in cols2
+
+
+def test_init_idempotent(tmp_db):
+    db.init()
+    db.init()  # gọi nhiều lần không lỗi
+    assert db.speaker_names() == {}
+
+
 def test_list_orders_newest_first(tmp_db):
     _insert(tid="20260101-000000-a")
     db.insert_transcript(db.TranscriptRecord(
