@@ -1,7 +1,7 @@
 # Plan: Correction Library (sửa transcript + thư viện tự học)
 
 - **Source**: US-801..US-805 (net-new — chưa có trong PRD; định nghĩa tại đây, Feature Preview duyệt 2026-07-15). PRD sẽ thêm stub FR-6 trỏ về file này.
-- **Status**: Approved (2026-07-15)
+- **Status**: Implemented (2026-07-15)
 - **Updated**: 2026-07-15
 
 ## User Stories (net-new)
@@ -45,10 +45,14 @@ Không train model. "Học" = vòng dữ liệu: user sửa → diff trích cặ
 | T-009 | Glossary server-side: key `glossary` trong settings + GET/PUT; client đồng bộ localStorage lên 1 lần rồi đọc từ server | US-803 AC3 | → T-002 | `app/main.py`, `app/db.py`, `app/static/app.js` | [x] |
 | T-010 | Wire upload: `transcribe._process` gọi `build_bias` cho `DecodeSpec.glossary` + `LlmOpts.glossary`; few-shot pass 2 từ top cặp (thêm vào `_prompt_for`) — try/except never-fail | US-803 AC1, AC2 | → T-008 | `app/transcribe.py`, `app/correct.py` | [x] |
 | T-011 | Wire live: `LiveSession.__init__` merge `build_bias` vào spec (chốt lúc start, document là đổi giữa phiên không hiệu lực) | US-803 AC1 | → T-008 | `app/live.py` | [x] |
-| T-012 | Seed lexicon: `app/data/lexicon/{bac,trung,nam,en_accent}.json` (soạn nội dung, vài trăm entry); import vào `corrections` với `source=seed` theo toggle vùng trong settings | US-804 AC1 | ‖ với T-008 (sau T-002) | `app/data/lexicon/*` (mới), `app/corrections.py`, `app/main.py` | [ ] |
-| T-013 | Cập nhật online opt-in: `scripts/fetch_lexicon.py` (pattern fetch_diarize_models) + endpoint `POST /api/lexicon/update` + nút UI; URL cấu hình trong settings, verify sha256, merge không đè entry user | US-804 AC2 | → T-012 | `scripts/fetch_lexicon.py` (mới), `app/main.py`, `app/static/app.js` | [ ] |
-| T-014 | `ContextTracker` trong live: giữ K câu gần nhất + tóm tắt chủ đề (LLM condense mỗi M câu, chạy nền never-fail); truyền context cho cả Ollama (bump num_ctx) lẫn OpenRouter | US-805 | ‖ với T-010..T-013 (sau T-001) | `app/live.py`, `app/correct.py` | [ ] |
-| T-015 | Tests theo từng PR: migration+rollback, extract_pairs (cặp thuật ngữ vs văn phong), build_bias rank/cap, API text+corrections, seed import idempotent, ContextTracker (fake LLM, không sleep) | US-801..805 | → theo từng task land | `tests/test_corrections.py` (mới), `tests/test_db.py`, `tests/test_live_context.py` (mới) | [ ] |
+| T-012 | Seed lexicon: `app/data/lexicon/{bac,trung,nam,en_accent}.json` (soạn nội dung, vài trăm entry); import vào `corrections` với `source=seed` theo toggle vùng trong settings | US-804 AC1 | ‖ với T-008 (sau T-002) | `app/data/lexicon/*` (mới), `app/corrections.py`, `app/main.py` | [x] |
+| T-013 | Cập nhật online opt-in: `scripts/fetch_lexicon.py` (pattern fetch_diarize_models) + endpoint `POST /api/lexicon/update` + nút UI; URL cấu hình trong settings, verify sha256, merge không đè entry user | US-804 AC2 | → T-012 | `scripts/fetch_lexicon.py` (mới), `app/main.py`, `app/static/app.js` | [x] |
+| T-014 | `ContextTracker` trong live: giữ K câu gần nhất + tóm tắt chủ đề (LLM condense mỗi M câu, chạy nền never-fail); truyền context cho cả Ollama (bump num_ctx) lẫn OpenRouter | US-805 | ‖ với T-010..T-013 (sau T-001) | `app/live.py`, `app/correct.py` | [x] |
+| T-015 | Tests theo từng PR: migration+rollback, extract_pairs (cặp thuật ngữ vs văn phong), build_bias rank/cap, API text+corrections, seed import idempotent, ContextTracker (fake LLM, không sleep) | US-801..805 | → theo từng task land | `tests/test_corrections.py` (mới), `tests/test_db.py`, `tests/test_live_context.py` (mới) | [x] |
+
+### Ghi chú triển khai (write-back PR4/PR5)
+- Seed lexicon: en_accent 115 entry (vượt guideline 40-80 vì mỗi thuật ngữ 1-2 biến âm); GET settings trả nhóm `lexicon: {bac,trung,nam,en,url}` theo style nested của `diarize`. Không đưa cặp rủi ro (dzậy/hén) — biến âm 2 chiều làm bias tệ đi.
+- ContextTracker đặt ở `app/live.py` (state theo vòng đời phiên + thread nền, join khi Dừng); `app/correct.py` chỉ thêm `summarize_topic` stateless. Tracker nuôi bằng câu final raw tại `_finalize` (mọi câu, kể cả câu ngắn không qua pass 2). Refactor 2 backend về `_chat_ollama`/`_chat_openrouter` cùng build prompt qua `_prompt_for` — Ollama giờ nhận context; `CORRECT_NUM_CTX` 2048→4096.
 
 ### Ghi chú triển khai (write-back PR3)
 - T-008 tách 2 hàm thay vì 1: `build_bias(user_glossary)` (term `right` cho ASR, cap 800 ký tự, phần user không bao giờ bị cắt) + `top_pairs(limit)` (cặp few-shot cho pass 2). Dedupe so casefold theo term tách dấu phẩy (exact), không substring — tránh drop "git" khi glossary có "GitHub".
