@@ -93,3 +93,40 @@ def test_diarize_guard_missing_transcript(client, monkeypatch):
     monkeypatch.setattr(diarize, "models_present", lambda: True)
     r = client.post("/api/transcripts/khong-co/diarize")
     assert r.status_code == 404
+
+
+# ── Settings API: glossary — server là nguồn chân lý (US-803 AC3) ───────────
+def _stub_engine(monkeypatch):
+    # GET /api/settings đọc engine info — stub để test không probe engine thật.
+    from types import SimpleNamespace
+
+    from app import engines
+    info = SimpleNamespace(tier="cpu", model_name="stub")
+    monkeypatch.setattr(engines, "get_engine", lambda: SimpleNamespace(info=info))
+
+
+def test_settings_glossary_default_empty(client, monkeypatch):
+    _stub_engine(monkeypatch)
+    assert client.get("/api/settings").json()["glossary"] == ""
+
+
+def test_settings_glossary_put_then_get(client, monkeypatch):
+    _stub_engine(monkeypatch)
+    r = client.put("/api/settings", json={"glossary": "Kubernetes, RAG pipeline"})
+    assert r.status_code == 200
+    assert r.json()["glossary"] == "Kubernetes, RAG pipeline"
+    assert client.get("/api/settings").json()["glossary"] == "Kubernetes, RAG pipeline"
+
+
+def test_settings_put_without_glossary_keeps_it(client, monkeypatch):
+    _stub_engine(monkeypatch)
+    client.put("/api/settings", json={"glossary": "MLOps"})
+    # PUT key khác không đụng glossary; PUT glossary không đụng key khác.
+    client.put("/api/settings", json={"diarize_enabled": True})
+    s = client.get("/api/settings").json()
+    assert s["glossary"] == "MLOps"
+    assert s["diarize"]["enabled"] is True
+    client.put("/api/settings", json={"glossary": ""})
+    s = client.get("/api/settings").json()
+    assert s["glossary"] == ""  # cho phép xóa glossary bằng chuỗi rỗng
+    assert s["diarize"]["enabled"] is True

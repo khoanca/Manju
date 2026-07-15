@@ -22,7 +22,7 @@ import numpy as np
 from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from app import engines, transcribe
+from app import corrections, engines, transcribe
 from app.correct import LlmOpts, correct_sentence, openrouter_enabled
 
 SAMPLE_RATE = 16000
@@ -60,7 +60,12 @@ class LiveSession:
         self.loop = loop
         self.language = "en" if cfg.get("language") == "en" else "vi"
         self.engine = engines.get_engine()
-        self.glossary = (cfg.get("glossary") or "").strip()
+        # US-803: merge term approved từ thư viện vào glossary + snapshot
+        # few-shot pairs — chốt 1 LẦN lúc start phiên (spec frozen, không
+        # query mỗi câu); sửa thư viện giữa phiên không hiệu lực, giống
+        # glossary user nhập.
+        self.glossary = corrections.build_bias((cfg.get("glossary") or "").strip())
+        self.pairs = tuple(corrections.top_pairs(10))  # live cần prompt ngắn — ít hơn upload
         self.correct_enabled = bool(cfg.get("correct", True))
         # Client mỏng (PWA) tự giữ audio trong OPFS trên thiết bị → server
         # không ghi WAV (PRD FR-4).
@@ -303,6 +308,7 @@ class LiveSession:
                     context=context,
                     num_ctx=CORRECT_NUM_CTX,
                     timeout=CORRECT_TIMEOUT_S,
+                    pairs=self.pairs,
                 ),
             )
             changed = ok and fixed != text

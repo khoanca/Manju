@@ -88,6 +88,7 @@ def api_job(job_id: str):
 class SettingsIn(BaseModel):
     audio_dir: str | None = None
     diarize_enabled: bool | None = None
+    glossary: str | None = None
 
 
 @app.get("/api/settings")
@@ -95,6 +96,7 @@ def api_settings():
     info = engines.get_engine().info
     return {
         "audio_dir": str(db.get_audio_dir()),
+        "glossary": db.get_setting("glossary", "") or "",
         "engine": {"tier": info.tier, "model": info.model_name},
         "max_live_sessions": live.MAX_LIVE_SESSIONS,
         "diarize": {
@@ -113,9 +115,12 @@ def api_settings_put(body: SettingsIn):
             raise HTTPException(400, str(exc)) from exc
     if body.diarize_enabled is not None:
         db.set_setting("diarize_enabled", "1" if body.diarize_enabled else "0")
+    if body.glossary is not None:
+        db.set_setting("glossary", body.glossary)
     return {
         "audio_dir": str(db.get_audio_dir()),
         "diarize_enabled": transcribe.diarize_enabled(),
+        "glossary": db.get_setting("glossary", "") or "",
     }
 
 

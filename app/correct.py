@@ -51,6 +51,7 @@ class LlmOpts:
     context: str = ""  # vài câu trước đó — chỉ backend OpenRouter dùng
     num_ctx: int = 8192  # chỉ backend Ollama dùng
     timeout: float = TIMEOUT_S
+    pairs: tuple[tuple[str, str], ...] = ()  # few-shot (sai → đúng) từ thư viện (US-803)
 
 _SYSTEM_PROMPT = (
     "Bạn là công cụ soát lỗi transcript cuộc họp tiếng Việt có pha thuật ngữ "
@@ -65,8 +66,17 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _prompt_for(chunk: str, glossary: str, context: str = "") -> str:
+def _prompt_for(
+    chunk: str,
+    glossary: str,
+    context: str = "",
+    pairs: tuple[tuple[str, str], ...] = (),
+) -> str:
     parts = []
+    if pairs:
+        # Few-shot từ thư viện đã duyệt: LLM sửa nhất quán các lỗi hay gặp.
+        listing = "\n".join(f"- {w} → {r}" for w, r in pairs)
+        parts.append("Các cặp đã biết (sai → đúng):\n" + listing)
     if glossary:
         parts.append(f"Danh sách thuật ngữ / tên riêng cần nhận đúng: {glossary}")
     if context:
@@ -116,7 +126,7 @@ def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
             "options": {"temperature": 0.1, "num_ctx": opts.num_ctx},
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _prompt_for(chunk, opts.glossary)},
+                {"role": "user", "content": _prompt_for(chunk, opts.glossary, pairs=opts.pairs)},
             ],
         },
         timeout=opts.timeout,
@@ -134,7 +144,10 @@ def _correct_chunk_openrouter(client: httpx.Client, chunk: str, opts: LlmOpts) -
             "model": OPENROUTER_MODEL,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _prompt_for(chunk, opts.glossary, opts.context)},
+                {
+                    "role": "user",
+                    "content": _prompt_for(chunk, opts.glossary, opts.context, opts.pairs),
+                },
             ],
         },
         timeout=opts.timeout,
@@ -179,6 +192,7 @@ def correct_text(
     text: str,
     glossary: str = "",
     on_progress: Callable[[float], None] | None = None,
+    pairs: tuple[tuple[str, str], ...] = (),
 ) -> tuple[str, bool]:
     """Trả (text đã sửa, True) nếu pass 2 chạy trót lọt, ngược lại (text gốc, False)."""
     text = text.strip()
@@ -186,7 +200,7 @@ def correct_text(
         return text, False
     chunks = _split_chunks(text)
     fixed_parts: list[str] = []
-    opts = LlmOpts(glossary=glossary)
+    opts = LlmOpts(glossary=glossary, pairs=pairs)
     try:
         with httpx.Client() as client:
             for i, chunk in enumerate(chunks):

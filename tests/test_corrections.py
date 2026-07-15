@@ -1,11 +1,27 @@
-"""API sửa transcript tay (US-801) + CRUD thư viện sửa lỗi (US-802) — DB tạm."""
+"""API sửa transcript tay (US-801) + CRUD thư viện sửa lỗi (US-802)
++ build_bias/top_pairs mồi library vào ASR/pass 2 (US-803) — DB tạm."""
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import db, transcribe
-from app.corrections import extract_pairs
+from app.corrections import BIAS_CAP_CHARS, build_bias, extract_pairs, top_pairs
+
+
+@pytest.fixture
+def tmp_db(tmp_path, monkeypatch):
+    """DB tạm, không cần app — cho test thuần build_bias/top_pairs/wiring."""
+    monkeypatch.setattr(db, "DATA", tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    monkeypatch.setattr(db, "DEFAULT_RECORDINGS", tmp_path / "rec")
+    monkeypatch.setattr(transcribe, "TRANSCRIPTS", tmp_path / "tx")
+    (tmp_path / "tx").mkdir()
+    (tmp_path / "rec").mkdir()
+    db.init()
+    return tmp_path
 
 
 @pytest.fixture
@@ -239,3 +255,128 @@ def test_corrections_missing_404(client):
     assert client.patch("/api/corrections/cor-khongco",
                         json={"tag": "bac"}).status_code == 404
     assert client.delete("/api/corrections/cor-khongco").status_code == 404
+
+
+# ── build_bias / top_pairs (T-008, US-803) ─────────────────────────────────
+def _seed_approved(wrong: str, right: str, count: int = 1) -> None:
+    """Seed 1 cặp approved với count mong muốn (upsert lặp để cộng count)."""
+    row = db.upsert_correction(wrong, right)
+    db.set_correction_status(row["id"], "approved")
+    for _ in range(count - 1):
+        db.upsert_correction(wrong, right)
+
+
+def test_build_bias_ranks_by_count(tmp_db):
+    _seed_approved("gít háp", "GitHub", count=1)
+    _seed_approved("cu bơ nét", "Kubernetes", count=3)
+    _seed_approved("đóc cơ", "Docker", count=2)
+    # User glossary đứng trước, library nối sau theo count DESC
+    assert build_bias("MyTerm") == "MyTerm, Kubernetes, Docker, GitHub"
+
+
+def test_build_bias_empty_library_returns_user_glossary(tmp_db):
+    assert build_bias("Kubernetes, deploy") == "Kubernetes, deploy"
+    assert build_bias("") == ""
+
+
+def test_build_bias_ignores_pending(tmp_db):
+    db.upsert_correction("gít", "git")  # pending — chưa được mồi
+    assert build_bias("MyTerm") == "MyTerm"
+
+
+def test_build_bias_dedupes_against_user_glossary_casefold(tmp_db):
+    _seed_approved("cu bơ nét", "kubernetes", count=3)  # trùng user (khác hoa-thường)
+    _seed_approved("gít háp", "GitHub", count=2)
+    assert build_bias("Kubernetes, deploy") == "Kubernetes, deploy, GitHub"
+
+
+def test_build_bias_never_cuts_user_glossary(tmp_db):
+    user = "u" * 900  # user glossary dài hơn cả cap — vẫn giữ nguyên vẹn
+    _seed_approved("sai", "right-term", count=2)
+    assert build_bias(user) == user  # thêm term nào cũng vượt cap → dừng
+
+
+def test_build_bias_caps_total_length(tmp_db):
+    # 10 term ~85 ký tự, count giảm dần — chỉ nạp được tới cap rồi dừng
+    for i in range(10):
+        _seed_approved(f"sai {i}", f"right-{i:02d}-" + "x" * 76, count=11 - i)
+    out = build_bias("MyTerm")
+    assert out.startswith("MyTerm, right-00-")
+    assert len(out) <= BIAS_CAP_CHARS
+    assert "right-09-" not in out  # term rank thấp nhất bị cắt
+
+
+def test_build_bias_db_error_returns_user_glossary(tmp_db, monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("db nổ giả lập")
+
+    monkeypatch.setattr(db, "list_corrections", boom)
+    assert build_bias("MyTerm") == "MyTerm"  # never-fail (AC2)
+
+
+def test_top_pairs_sorts_and_limits(tmp_db):
+    _seed_approved("gít háp", "GitHub", count=1)
+    _seed_approved("cu bơ nét", "Kubernetes", count=3)
+    _seed_approved("đóc cơ", "Docker", count=2)
+    db.upsert_correction("pen đinh", "pending-x")  # pending — không lấy
+    assert top_pairs() == [
+        ("cu bơ nét", "Kubernetes"), ("đóc cơ", "Docker"), ("gít háp", "GitHub"),
+    ]
+    assert top_pairs(limit=2) == [("cu bơ nét", "Kubernetes"), ("đóc cơ", "Docker")]
+
+
+def test_top_pairs_db_error_returns_empty(tmp_db, monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("db nổ giả lập")
+
+    monkeypatch.setattr(db, "list_corrections", boom)
+    assert top_pairs() == []
+
+
+# ── Wiring upload + live (T-010, T-011) ────────────────────────────────────
+def test_process_wires_build_bias_into_asr_and_pass2(tmp_db, monkeypatch, tmp_path):
+    _seed_approved("cu bơ nét", "Kubernetes", count=2)
+    captured = {}
+
+    class FakeEngine:
+        info = SimpleNamespace(tier="mlx", model_name="large-v3-turbo")
+
+        def transcribe_file(self, path, spec, on_progress):
+            captured["asr_glossary"] = spec.glossary
+            return SimpleNamespace(text="triển khai cu bơ nét", segments=[], duration=1.0)
+
+    def fake_correct(text, glossary="", on_progress=None, pairs=()):
+        captured["llm_glossary"] = glossary
+        captured["pairs"] = pairs
+        return text, True
+
+    monkeypatch.setattr(transcribe.engines, "get_engine", lambda: FakeEngine())
+    monkeypatch.setattr(transcribe, "correct_text", fake_correct)
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"\x00\x00")
+    job_id = transcribe._new_job()
+    transcribe._process(
+        job_id, audio, transcribe.JobSpec(filename="a.wav", language="vi", prompt="MyTerm")
+    )
+    # Cùng 1 glossary đã merge library cho cả mồi Whisper lẫn pass 2 (AC1)
+    assert captured["asr_glossary"] == "MyTerm, Kubernetes"
+    assert captured["llm_glossary"] == "MyTerm, Kubernetes"
+    assert captured["pairs"] == (("cu bơ nét", "Kubernetes"),)
+    assert transcribe.get_job(job_id)["status"] == "done"
+
+
+def test_live_session_snapshots_bias_at_start(tmp_db, monkeypatch):
+    from app import live
+
+    _seed_approved("cu bơ nét", "Kubernetes", count=2)
+    monkeypatch.setattr(
+        live.engines,
+        "get_engine",
+        lambda: SimpleNamespace(info=SimpleNamespace(tier="mlx", model_name="large-v3-turbo")),
+    )
+    session = live.LiveSession(
+        ws=None, loop=None, cfg={"glossary": "MyTerm", "store_audio": False}
+    )
+    # Library chốt lúc start phiên: vào cả spec ASR lẫn pairs pass 2
+    assert session.spec.glossary == "MyTerm, Kubernetes"
+    assert session.pairs == (("cu bơ nét", "Kubernetes"),)

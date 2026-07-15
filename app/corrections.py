@@ -1,8 +1,11 @@
-"""Trích cặp (sai → đúng) từ diff bản máy vs bản user sửa (US-802)."""
+"""Trích cặp (sai → đúng) từ diff bản máy vs bản user sửa (US-802)
++ build bias mồi ASR / few-shot pass 2 từ entry approved (US-803)."""
 from __future__ import annotations
 
 import string
 from difflib import SequenceMatcher
+
+from app import db
 
 # Ngưỡng lọc chống cặp văn phong (US-802 AC3):
 # - MAX_SPAN: mỗi bên ≤4 từ — dài hơn coi là user viết lại câu, không phải sửa lỗi;
@@ -52,3 +55,43 @@ def extract_pairs(machine: str, edited: str) -> list[tuple[str, str]]:
         if not _is_noise(wrong, right):
             pairs.append((wrong, right))
     return pairs
+
+
+# Cap chuỗi bias mồi Whisper: initial_prompt thực tế chỉ ăn ~224 token
+# (engines.py — Whisper tự bỏ phần đuôi thừa), ~800 ký tự là ngưỡng an toàn.
+# Chỉ cap phần nối từ thư viện — phần user KHÔNG bao giờ bị cắt.
+BIAS_CAP_CHARS = 800
+
+
+def build_bias(user_glossary: str) -> str:
+    """Glossary hiệu lực cho ASR: glossary user giữ nguyên đứng trước, nối
+    thêm các term `right` approved từ thư viện (db đã sort count DESC,
+    updated_at DESC), bỏ term đã có (so casefold), dừng khi vượt
+    BIAS_CAP_CHARS. Lỗi DB → trả nguyên user_glossary (never-fail, US-803 AC2).
+    """
+    out = user_glossary.strip()
+    try:
+        rows = db.list_corrections(status="approved")
+    except Exception:  # noqa: BLE001 — thư viện hỏng không được chặn transcribe
+        return out
+    seen = {t.strip().casefold() for t in out.split(",") if t.strip()}
+    for row in rows:
+        term = row["right"].strip()
+        if not term or term.casefold() in seen:
+            continue
+        merged = f"{out}, {term}" if out else term
+        if len(merged) > BIAS_CAP_CHARS:
+            break
+        out = merged
+        seen.add(term.casefold())
+    return out
+
+
+def top_pairs(limit: int = 20) -> list[tuple[str, str]]:
+    """Cặp (sai → đúng) approved gặp nhiều nhất — few-shot cho prompt pass 2.
+    Lỗi DB → [] (never-fail, US-803 AC2)."""
+    try:
+        rows = db.list_corrections(status="approved")
+    except Exception:  # noqa: BLE001
+        return []
+    return [(r["wrong"], r["right"]) for r in rows[:limit]]

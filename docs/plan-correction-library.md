@@ -41,14 +41,19 @@ Không train model. "Học" = vòng dữ liệu: user sửa → diff trích cặ
 | T-005 | `app/corrections.py`: `extract_pairs(machine, edited)` — difflib token-level, lọc: span thay ≤4 từ, similarity cặp ≥0.3 hoặc cùng số từ, bỏ cặp chỉ khác hoa-thường/dấu câu | US-802 AC1, AC3 | ‖ với T-003 (sau T-001) | `app/corrections.py` (mới) | [x] |
 | T-006 | Hook: PATCH text → `extract_pairs` (diff vs bản `text` tại thời điểm mở editor, gửi kèm request) → upsert pending | US-802 | → T-003, T-005 | `app/main.py`, `app/corrections.py` | [x] |
 | T-007 | UI Thư viện (tab Settings): bảng cặp, filter vùng/accent/source/status, duyệt/loại/xoá, sửa tag | US-802 AC2, US-804 | → T-003 | `app/static/app.js`, `index.html` | [x] |
-| T-008 | `build_bias(user_glossary) -> str`: merge glossary user + entry approved, rank count desc + recency, cap ký tự (~224 token Whisper); vị trí trong `app/corrections.py` | US-803 AC1 | → T-002 | `app/corrections.py` | [ ] |
-| T-009 | Glossary server-side: key `glossary` trong settings + GET/PUT; client đồng bộ localStorage lên 1 lần rồi đọc từ server | US-803 AC3 | → T-002 | `app/main.py`, `app/db.py`, `app/static/app.js` | [ ] |
-| T-010 | Wire upload: `transcribe._process` gọi `build_bias` cho `DecodeSpec.glossary` + `LlmOpts.glossary`; few-shot pass 2 từ top cặp (thêm vào `_prompt_for`) — try/except never-fail | US-803 AC1, AC2 | → T-008 | `app/transcribe.py`, `app/correct.py` | [ ] |
-| T-011 | Wire live: `LiveSession.__init__` merge `build_bias` vào spec (chốt lúc start, document là đổi giữa phiên không hiệu lực) | US-803 AC1 | → T-008 | `app/live.py` | [ ] |
+| T-008 | `build_bias(user_glossary) -> str`: merge glossary user + entry approved, rank count desc + recency, cap ký tự (~224 token Whisper); vị trí trong `app/corrections.py` | US-803 AC1 | → T-002 | `app/corrections.py` | [x] |
+| T-009 | Glossary server-side: key `glossary` trong settings + GET/PUT; client đồng bộ localStorage lên 1 lần rồi đọc từ server | US-803 AC3 | → T-002 | `app/main.py`, `app/db.py`, `app/static/app.js` | [x] |
+| T-010 | Wire upload: `transcribe._process` gọi `build_bias` cho `DecodeSpec.glossary` + `LlmOpts.glossary`; few-shot pass 2 từ top cặp (thêm vào `_prompt_for`) — try/except never-fail | US-803 AC1, AC2 | → T-008 | `app/transcribe.py`, `app/correct.py` | [x] |
+| T-011 | Wire live: `LiveSession.__init__` merge `build_bias` vào spec (chốt lúc start, document là đổi giữa phiên không hiệu lực) | US-803 AC1 | → T-008 | `app/live.py` | [x] |
 | T-012 | Seed lexicon: `app/data/lexicon/{bac,trung,nam,en_accent}.json` (soạn nội dung, vài trăm entry); import vào `corrections` với `source=seed` theo toggle vùng trong settings | US-804 AC1 | ‖ với T-008 (sau T-002) | `app/data/lexicon/*` (mới), `app/corrections.py`, `app/main.py` | [ ] |
 | T-013 | Cập nhật online opt-in: `scripts/fetch_lexicon.py` (pattern fetch_diarize_models) + endpoint `POST /api/lexicon/update` + nút UI; URL cấu hình trong settings, verify sha256, merge không đè entry user | US-804 AC2 | → T-012 | `scripts/fetch_lexicon.py` (mới), `app/main.py`, `app/static/app.js` | [ ] |
 | T-014 | `ContextTracker` trong live: giữ K câu gần nhất + tóm tắt chủ đề (LLM condense mỗi M câu, chạy nền never-fail); truyền context cho cả Ollama (bump num_ctx) lẫn OpenRouter | US-805 | ‖ với T-010..T-013 (sau T-001) | `app/live.py`, `app/correct.py` | [ ] |
 | T-015 | Tests theo từng PR: migration+rollback, extract_pairs (cặp thuật ngữ vs văn phong), build_bias rank/cap, API text+corrections, seed import idempotent, ContextTracker (fake LLM, không sleep) | US-801..805 | → theo từng task land | `tests/test_corrections.py` (mới), `tests/test_db.py`, `tests/test_live_context.py` (mới) | [ ] |
+
+### Ghi chú triển khai (write-back PR3)
+- T-008 tách 2 hàm thay vì 1: `build_bias(user_glossary)` (term `right` cho ASR, cap 800 ký tự, phần user không bao giờ bị cắt) + `top_pairs(limit)` (cặp few-shot cho pass 2). Dedupe so casefold theo term tách dấu phẩy (exact), không substring — tránh drop "git" khi glossary có "GitHub".
+- `_prompt_for`/`correct_text`/`_maybe_correct` thêm param `pairs` (4 param, 3 default) thay vì gom LlmOpts — chấp nhận vượt nhẹ guideline ≤3 param để sửa tối thiểu.
+- Live snapshot `top_pairs(10)` tại `__init__` (start phiên), ít hơn upload (20) vì prompt live phải ngắn.
 
 ## Stacked PRs (>400 LOC → chia 5 PR, mỗi PR ≤400, độc lập deploy)
 

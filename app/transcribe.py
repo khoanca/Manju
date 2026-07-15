@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import db, diarize, engines
+from app import corrections, db, diarize, engines
 from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
@@ -121,12 +121,15 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         if engine.info.tier == "cpu" and spec.model_name in ALLOWED_MODELS
         else None
     )
+    # US-803: glossary hiệu lực = glossary user + term approved từ thư viện
+    # (build_bias never-fail) — tính 1 lần, dùng cho cả mồi Whisper lẫn pass 2.
+    glossary = corrections.build_bias(spec.prompt)
     result = engine.transcribe_file(
         audio_path,
-        engines.DecodeSpec(spec.language, spec.prompt, override),
+        engines.DecodeSpec(spec.language, glossary, override),
         lambda text, p: _update(job_id, text=text, progress=p),
     )
-    full_text, corrected = _maybe_correct(job_id, result.text, spec)
+    full_text, corrected = _maybe_correct(job_id, result.text, spec, glossary)
     segments, speaker_map = _maybe_diarize(job_id, audio_path, result.segments)
     transcript_id = save_transcript(TranscriptDraft(
         original_name=spec.filename,
@@ -143,13 +146,18 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
     _update(job_id, status="done", text=full_text, progress=1.0, transcript_id=transcript_id)
 
 
-def _maybe_correct(job_id: str, text: str, spec: JobSpec) -> tuple[str, bool]:
-    """Pass 2: LLM soát lại thuật ngữ tiếng Anh bị phiên âm sai."""
+def _maybe_correct(job_id: str, text: str, spec: JobSpec, glossary: str) -> tuple[str, bool]:
+    """Pass 2: LLM soát lại thuật ngữ tiếng Anh bị phiên âm sai.
+    `glossary` là bản đã merge thư viện (build_bias) — dùng chung với ASR."""
     if not (spec.correct and text):
         return text, False
     _update(job_id, status="correcting", progress=0.0)
     return correct_text(
-        text, glossary=spec.prompt, on_progress=lambda p: _update(job_id, progress=p)
+        text,
+        glossary=glossary,
+        on_progress=lambda p: _update(job_id, progress=p),
+        # Few-shot cặp (sai → đúng) đã duyệt — top_pairs never-fail (US-803).
+        pairs=tuple(corrections.top_pairs()),
     )
 
 

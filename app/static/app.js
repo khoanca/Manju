@@ -35,6 +35,19 @@ function saveSettings(){
   }));
 }
 ["lang", "model", "prompt"].forEach(id => $(id).addEventListener("change", saveSettings));
+// Glossary: server là nguồn chân lý, localStorage chỉ là cache. User sửa xong
+// (change) → PUT lên server; lỗi mạng thì giữ cache, glossary vẫn gửi kèm
+// từng request nên không cần báo lỗi ồn ào.
+$("prompt").addEventListener("change", () => putGlossary($("prompt").value));
+async function putGlossary(text){
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ glossary: text }),
+    });
+    if (!r.ok) throw new Error(r.statusText);
+  } catch (e) { console.warn("Chưa sync glossary lên server:", e.message); }
+}
 $("swLocalAudio").onclick = () => {
   if (!HAS_OPFS) return;
   storeAudioLocal = $("swLocalAudio").classList.toggle("on");
@@ -48,6 +61,18 @@ async function loadServerSettings(){
     const s = await (await fetch("/api/settings")).json();
     $("engineVal").textContent = s.engine.model;
     $("audioDir").value = s.audio_dir;
+    // Glossary: server có → dùng làm chân lý (trừ khi user đang gõ dở);
+    // server rỗng mà local có → đẩy lên MỘT lần (migration từ bản chỉ-localStorage).
+    const remoteGlossary = s.glossary || "";
+    if (remoteGlossary){
+      if (document.activeElement !== $("prompt") && $("prompt").value !== remoteGlossary){
+        $("prompt").value = remoteGlossary;
+        saveSettings();
+      }
+    } else if ($("prompt").value.trim()){
+      console.info("Glossary: server chưa có — đồng bộ bản local lên server.");
+      putGlossary($("prompt").value);
+    }
     const d = s.diarize || {};
     diarizeReady = !!d.models_present;
     $("swDiarize").classList.toggle("on", !!d.enabled);
