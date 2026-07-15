@@ -15,6 +15,8 @@ import queue
 import threading
 import time
 import uuid
+from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,7 +25,7 @@ from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from app import corrections, engines, transcribe
-from app.correct import LlmOpts, correct_sentence, openrouter_enabled
+from app.correct import LlmOpts, correct_sentence, openrouter_enabled, summarize_topic
 
 SAMPLE_RATE = 16000
 TICK_S = 1.2  # nhịp vòng decode
@@ -36,8 +38,15 @@ MAX_UTTERANCE_S = 28.0  # nói liên tục quá → ép chốt câu (Whisper win
 NO_AUDIO_TIMEOUT_S = 2.0  # mic ngừng gửi frame → coi như hết câu
 CORRECTION_BACKLOG_MAX = 5  # hàng đợi pass 2 dồn quá → bỏ qua câu mới
 MIN_CORRECT_CHARS = 10  # câu quá ngắn không đáng gọi LLM
-CORRECT_NUM_CTX = 2048  # câu đơn → ctx nhỏ cho nhanh (KHÔNG kế thừa config server)
+# 2048→4096: prompt pass 2 giờ kèm ngữ cảnh đang diễn ra (topic + K câu recent,
+# US-805) nên 2048 dễ tràn khi câu dài + glossary + pairs; vẫn ctx nhỏ cho nhanh
+# (KHÔNG kế thừa config server — num_ctx phải set mọi request kẻo tràn RAM).
+CORRECT_NUM_CTX = 4096
 CORRECT_TIMEOUT_S = 20.0  # câu đơn phải kịp subtitle — không chờ như full-text
+CONTEXT_RECENT_K = 6  # số câu final gần nhất giữ làm ngữ cảnh pass 2
+CONTEXT_CONDENSE_EVERY = 8  # đủ chừng này câu mới thì condense topic 1 lần
+CONTEXT_TOPIC_NUM_CTX = 2048  # condense chỉ tóm vài câu → ctx nhỏ
+CONTEXT_TOPIC_TIMEOUT_S = 20.0  # condense chạy nền nhưng không để treo lâu
 
 # Silero mặc định cần lặng 2s mới tách đoạn — quá chậm cho subtitle; các giá trị
 # nhỏ ở đây chỉ để đo "đuôi buffer còn speech không", không dùng để cắt audio.
@@ -52,6 +61,75 @@ _slot = threading.Semaphore(MAX_LIVE_SESSIONS)
 def _speech_spans(audio: np.ndarray) -> list[dict]:
     """Các khoảng speech trong audio, đơn vị sample."""
     return get_speech_timestamps(audio, _VAD_OPTS, sampling_rate=SAMPLE_RATE)
+
+
+class ContextTracker:
+    """Biến ngữ cảnh đang diễn ra cho pass 2 (US-805).
+
+    Giữ K câu final gần nhất + `topic` (tóm tắt chủ đề, cập nhật dần). Mỗi
+    CONTEXT_CONDENSE_EVERY câu, condense chạy thread NỀN (không chặn subtitle):
+    gọi LLM tóm tắt chủ đề từ topic cũ + các câu mới. Đang condense thì câu mới
+    vẫn dùng topic cũ; LLM lỗi/timeout → giữ topic cũ (never-fail). Cuộc họp đổi
+    chủ đề giữa chừng thì topic tự trôi theo, pass 2 sửa thuật ngữ đúng mạch.
+    """
+
+    def __init__(self, summarize: Callable[[str, str], str | None] | None = None):
+        # `summarize` inject được để test không gọi LLM thật.
+        self._summarize = summarize or _summarize_topic_llm
+        self._lock = threading.Lock()
+        self._recent: deque[str] = deque(maxlen=CONTEXT_RECENT_K)
+        self._new: list[str] = []  # câu dồn từ lần condense trước
+        self._topic = ""
+        self._thread: threading.Thread | None = None
+        self._closed = False
+
+    def add(self, text: str) -> None:
+        """Nhận 1 câu final; đủ M câu mới (và không có condense đang chạy) → kick nền."""
+        with self._lock:
+            self._recent.append(text)
+            self._new.append(text)
+            busy = self._thread is not None and self._thread.is_alive()
+            if self._closed or busy or len(self._new) < CONTEXT_CONDENSE_EVERY:
+                return  # câu dồn tiếp trong _new, lần add sau thử lại
+            topic, batch = self._topic, " ".join(self._new)
+            self._new.clear()
+            self._thread = threading.Thread(
+                target=self._condense, args=(topic, batch), daemon=True
+            )
+            self._thread.start()
+
+    def _condense(self, topic: str, batch: str) -> None:
+        try:
+            new_topic = self._summarize(topic, batch)
+        except Exception:  # noqa: BLE001 — condense lỗi thì giữ topic cũ
+            return
+        if new_topic:
+            with self._lock:
+                self._topic = new_topic
+
+    def context(self) -> str:
+        """Chuỗi ngữ cảnh cho LlmOpts.context: topic (nếu có) + các câu recent."""
+        with self._lock:
+            parts = []
+            if self._topic:
+                parts.append("Chủ đề đang bàn: " + self._topic)
+            if self._recent:
+                parts.append(" ".join(self._recent))
+            return "\n".join(parts)
+
+    def close(self) -> None:
+        """Ngừng nhận condense mới, chờ condense đang chạy xong — không rò thread."""
+        with self._lock:
+            self._closed = True
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout=CONTEXT_TOPIC_TIMEOUT_S + 5)
+
+
+def _summarize_topic_llm(topic: str, batch: str) -> str | None:
+    return summarize_topic(
+        topic, batch, LlmOpts(num_ctx=CONTEXT_TOPIC_NUM_CTX, timeout=CONTEXT_TOPIC_TIMEOUT_S)
+    )
 
 
 class LiveSession:
@@ -112,6 +190,7 @@ class LiveSession:
     def _init_workers(self) -> None:
         self.stop_event = threading.Event()
         self.correction_q: queue.Queue = queue.Queue()
+        self.tracker = ContextTracker()  # ngữ cảnh đang diễn ra cho pass 2 (US-805)
         self.started_at = datetime.now(UTC).astimezone()
         self._decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
         self._correct_thread = threading.Thread(target=self._correct_loop, daemon=True)
@@ -144,6 +223,7 @@ class LiveSession:
         if self.correct_enabled:
             self.correction_q.put(None)
             self._correct_thread.join(timeout=12)
+        self.tracker.close()  # chờ condense nền xong — không rò thread sau Dừng
         return self._save()
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -275,12 +355,15 @@ class LiveSession:
         if text:
             self.sentences[utt] = text
             self.raw_sentences[utt] = text
-            if (
-                self.correct_enabled
-                and len(text) >= MIN_CORRECT_CHARS
-                and self.correction_q.qsize() < CORRECTION_BACKLOG_MAX
-            ):
-                self.correction_q.put((utt, text))
+            if self.correct_enabled:
+                # Mọi câu final (kể cả câu ngắn bỏ qua pass 2) đều nuôi tracker
+                # để topic bám sát mạch cuộc họp.
+                self.tracker.add(text)
+                if (
+                    len(text) >= MIN_CORRECT_CHARS
+                    and self.correction_q.qsize() < CORRECTION_BACKLOG_MAX
+                ):
+                    self.correction_q.put((utt, text))
         # Chỉ bỏ phần đã chốt: audio sau đó (câu kế tiếp đã bắt đầu trong lúc
         # decode / sau điểm cắt) giữ lại cho tick idle mở utterance mới.
         self._drop_prefix(len(audio) if consumed is None else consumed)
@@ -297,10 +380,9 @@ class LiveSession:
             if item is None:
                 return
             utt, text = item
-            # Vài câu ngay trước làm ngữ cảnh: Claude đoán thuật ngữ theo mạch
-            # cuộc họp ("can ban che quýt" → "kanban checklist").
-            prev = [self.sentences[k] for k in sorted(self.sentences) if k < utt]
-            context = " ".join(prev[-3:])
+            # Ngữ cảnh đang diễn ra (topic + câu gần nhất, US-805): LLM đoán
+            # thuật ngữ theo mạch cuộc họp ("can ban che quýt" → "kanban checklist").
+            context = self.tracker.context()
             fixed, ok = correct_sentence(
                 text,
                 LlmOpts(
