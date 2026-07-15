@@ -283,7 +283,7 @@ async function showAudio(id, hasServerAudio){
 }
 // ── Lớp speaker (nhãn giọng, gán tên, phụ đề) ──────────────────────────────
 let SPK_NAMES = {};        // speaker_id → tên
-let curSegments = null, curSpeakerMap = {}, curDetailId = null;
+let curSegments = null, curSpeakerMap = {}, curDetailId = null, curHasServerAudio = false;
 const SPK_COLORS = ["#7c6cf0","#e0698a","#3fa7d6","#f2a154","#4caf88","#b57edc","#d9534f","#5b7fbd"];
 const spkColor = (spk) => SPK_COLORS[((spk % SPK_COLORS.length) + SPK_COLORS.length) % SPK_COLORS.length];
 async function loadSpeakers(){
@@ -305,6 +305,7 @@ function setResult(text, raw, segments, id, hasServerAudio, speakerMap){
   $("toggleRaw").style.display = rawText ? "" : "none";
   $("toggleRaw").textContent = "Bản gốc";
   curSegments = segments; curSpeakerMap = speakerMap || {}; curDetailId = id;
+  curHasServerAudio = !!(hasServerAudio && id);
   renderSegments(segments);
   showAudio(id, hasServerAudio);
 }
@@ -319,11 +320,13 @@ async function openDetail(m){
 }
 $("toggleRaw").onclick = () => { showingRaw = !showingRaw; $("result").value = showingRaw ? rawText : fixedText; $("toggleRaw").textContent = showingRaw ? "Bản sửa" : "Bản gốc"; };
 function renderSegments(segments){
-  const box = $("segList"), btn = $("toggleSegs"); box.innerHTML = "";
+  const box = $("segList"), btn = $("toggleSegs");
+  const wasOpen = box.style.display !== "none";  // giữ trạng thái mở khi vẽ lại (vd sau khi đặt tên)
+  box.innerHTML = "";
   const hasSegs = !!(segments && segments.length);
   const hasSpk = hasSegs && segments.some(s => s.spk !== undefined);
   // Nút tách giọng: hiện khi có segment + có file audio server để chạy lại pass 3
-  $("diarizeBtn").style.display = (hasSegs && curDetailId && !$("audioWrap").classList.contains("hidden")) || hasSpk ? "" : "none";
+  $("diarizeBtn").style.display = (hasSegs && curDetailId && curHasServerAudio) || hasSpk ? "" : "none";
   $("diarizeBtn").textContent = hasSpk ? "Tách lại" : "Tách giọng";
   $("dlSrt").style.display = $("dlVtt").style.display = hasSegs ? "" : "none";
   if (!hasSegs){ box.style.display = "none"; btn.style.display = "none"; return; }
@@ -341,7 +344,8 @@ function renderSegments(segments){
     const span = document.createElement("span"); span.textContent = s.text;
     p.append(span); box.appendChild(p);
   }
-  box.style.display = "none"; btn.style.display = ""; btn.textContent = "Mốc thời gian";
+  box.style.display = wasOpen ? "" : "none";
+  btn.style.display = ""; btn.textContent = wasOpen ? "Ẩn mốc" : "Mốc thời gian";
 }
 $("toggleSegs").onclick = () => { const h = $("segList").style.display === "none"; $("segList").style.display = h ? "" : "none"; $("toggleSegs").textContent = h ? "Ẩn mốc" : "Mốc thời gian"; };
 
