@@ -188,6 +188,31 @@
               background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:.2s; }
   .sw.on{ background:var(--accent); } .sw.on::after{ left:21px; }
 
+  /* ── Thư viện từ (US-802) — cặp sửa lỗi trong Settings ── */
+  .corr-head{ width:100%; text-align:left; }
+  #corrBody{ padding:0 17px 15px; }
+  .corr-filters{ display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 4px; }
+  .corr-filters select, .corr-filters input{ flex:1 1 110px; min-width:0; border:1px solid var(--line);
+            border-radius:11px; padding:8px 10px; font-size:13px; background:var(--card-2); outline:none; }
+  .corr-filters select:focus, .corr-filters input:focus{ border-color:var(--accent); }
+  .corr-item{ padding:12px 0; border-bottom:1px solid var(--line); }
+  .corr-item:last-child{ border-bottom:none; padding-bottom:2px; }
+  .corr-pair{ font-size:14.5px; overflow-wrap:anywhere; }
+  .corr-pair .w{ color:var(--muted); text-decoration:line-through; }
+  .corr-pair .r{ font-weight:700; }
+  .corr-meta{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:7px; }
+  .corr-acts{ display:flex; gap:6px; margin-left:auto; }
+  .corr-acts .mini{ padding:5px 9px; font-size:12.5px; }
+  .chip.corr-tag{ cursor:pointer; }
+  .chip.badge-pending{ background:var(--accent-soft); color:var(--accent-ink); }
+  .chip.badge-approved{ background:#eafaf1; color:#0a7a4f; }
+  .chip.badge-rejected{ background:#fdecec; color:#b91c1c; }
+  .tag-editwrap{ display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .tag-edit{ width:110px; border:1px solid var(--accent); border-radius:8px; padding:3px 8px;
+             font-size:13px; background:var(--card); outline:none; }
+  .tag-sugs{ display:flex; gap:5px; }
+  .tag-sugs .chip{ cursor:pointer; }
+
   /* ── Detail / result ──────────────────────────── */
   .det-card{ background:var(--card); border-radius:24px; padding:20px; box-shadow:var(--sh); }
   .det-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
@@ -245,7 +270,8 @@
   /* Mobile: form control ≥16px để iOS Safari không tự zoom khi focus */
   @media (max-width:899px){
     .search input, .set-row select, .set-row textarea, #audioDir, #result,
-    .filters select, .filters input, .seg-edit{ font-size:16px; }
+    .filters select, .filters input, .seg-edit,
+    .corr-filters select, .corr-filters input, .tag-edit{ font-size:16px; }
   }
 
   /* Điện thoại nhỏ (<380px): giảm padding & cỡ chữ lớn cho khỏi tràn */
@@ -537,6 +563,33 @@
     <div class="sec-label">Giọng đã lưu</div>
     <div class="set-card">
       <div id="speakerList" class="spk-list"><small style="color:var(--faint)">Chưa có giọng nào được ghi nhớ.</small></div>
+    </div>
+
+    <div class="sec-label">Thư viện từ</div>
+    <div class="set-card">
+      <button class="set-row corr-head" id="corrToggle">
+        <div class="set-ico">📚</div>
+        <div class="set-main"><b>Thư viện từ</b><small>Cặp sửa lỗi app học từ chỉnh sửa của bạn — chỉ cặp Đã duyệt được dùng để mồi ASR/pass 2</small></div>
+        <div class="set-val" id="corrChevron">▸</div>
+      </button>
+      <div class="hidden" id="corrBody">
+        <div class="corr-filters">
+          <select id="corrStatus" title="Trạng thái">
+            <option value="">Tất cả</option>
+            <option value="pending">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Đã loại</option>
+          </select>
+          <select id="corrSource" title="Nguồn">
+            <option value="">Mọi nguồn</option>
+            <option value="user">Bạn sửa</option>
+            <option value="seed">Có sẵn</option>
+            <option value="remote">Tải về</option>
+          </select>
+          <input id="corrTagFilter" placeholder="Tag…" />
+        </div>
+        <div id="corrList"></div>
+      </div>
     </div>
   </section>
 

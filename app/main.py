@@ -1,6 +1,7 @@
 """FastAPI app: upload file ghi âm → transcribe → text."""
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import db, diarize, engines, live, org, subtitle, transcribe
+from app import corrections, db, diarize, engines, live, org, subtitle, transcribe
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -147,8 +150,18 @@ def api_edit_text(transcript_id: str, body: EditedTextIn):
     if body.base_text is not None and body.base_text != current:
         raise HTTPException(409, "Bản ghi đã thay đổi, tải lại trước khi lưu")
     db.set_edited_text(transcript_id, body.edited_text)
-    # Hook trích cặp (sai → đúng) vào thư viện gắn tại đây (PR2 — T-006).
-    return {"ok": True, "edited_text": body.edited_text}
+    # Hook T-006: trích cặp (sai → đúng) vào thư viện — never-fail,
+    # lỗi trích cặp không được làm fail PATCH (US-802).
+    pairs_extracted = 0
+    if body.edited_text is not None and body.base_text is not None:
+        try:
+            pairs = corrections.extract_pairs(body.base_text, body.edited_text)
+            for wrong, right in pairs:
+                db.upsert_correction(wrong, right)
+            pairs_extracted = len(pairs)
+        except Exception:  # noqa: BLE001
+            logger.warning("Trích cặp sửa lỗi thất bại: %s", transcript_id, exc_info=True)
+    return {"ok": True, "edited_text": body.edited_text, "pairs_extracted": pairs_extracted}
 
 
 def _speaker_labels(speaker_map: dict | None) -> dict[int, str]:

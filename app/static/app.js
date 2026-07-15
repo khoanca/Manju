@@ -535,6 +535,117 @@ async function deleteSpeaker(id, name){
   loadSpeakerList();
 }
 
+// ── US-802: Thư viện từ — cặp sửa lỗi (Settings, load lười khi mở mục) ─────
+const CORR_SRC = { user: "Bạn sửa", seed: "Có sẵn", remote: "Tải về" };
+const CORR_ST = { pending: "Chờ duyệt", approved: "Đã duyệt", rejected: "Đã loại" };
+const CORR_TAG_SUGS = ["bắc", "trung", "nam", "en"];
+let corrFetched = false;   // chỉ fetch lần đầu mở mục, không fetch lúc khởi động
+
+$("corrToggle").onclick = () => {
+  const open = !$("corrBody").classList.toggle("hidden");
+  $("corrChevron").textContent = open ? "▾" : "▸";
+  if (open && !corrFetched){ corrFetched = true; loadCorrections(); }
+};
+["corrStatus", "corrSource", "corrTagFilter"].forEach(id => $(id).addEventListener("change", loadCorrections));
+$("corrTagFilter").addEventListener("keydown", e => { if (e.key === "Enter") loadCorrections(); });
+
+async function loadCorrections(){
+  const qs = new URLSearchParams();
+  if ($("corrStatus").value) qs.set("status", $("corrStatus").value);
+  if ($("corrSource").value) qs.set("source", $("corrSource").value);
+  const tag = $("corrTagFilter").value.trim();
+  if (tag) qs.set("tag", tag);
+  const q = qs.toString();
+  try {
+    const r = await fetch("/api/corrections" + (q ? "?" + q : ""));
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    renderCorrections(await r.json());
+  } catch (e) { alert("Lỗi tải thư viện từ: " + e.message); }
+}
+function renderCorrections(arr){
+  const box = $("corrList");
+  box.innerHTML = "";
+  if (!arr.length){
+    const filtered = $("corrStatus").value || $("corrSource").value || $("corrTagFilter").value.trim();
+    box.innerHTML = `<small style="color:var(--faint)">${filtered
+      ? "Không có cặp nào khớp bộ lọc."
+      : "Chưa có cặp nào — sửa transcript trong màn chi tiết để app bắt đầu học."}</small>`;
+    return;
+  }
+  for (const c of arr) box.appendChild(corrRow(c));
+}
+const corrMini = (label, fn, pri) => {
+  const b = document.createElement("button");
+  b.className = "mini" + (pri ? " pri" : ""); b.textContent = label; b.onclick = fn;
+  return b;
+};
+function corrRow(c){
+  const row = document.createElement("div"); row.className = "corr-item";
+  const pair = document.createElement("div"); pair.className = "corr-pair";
+  const w = document.createElement("span"); w.className = "w"; w.textContent = c.wrong;
+  const r = document.createElement("span"); r.className = "r"; r.textContent = c.right;
+  pair.append(w, " → ", r);
+  const meta = document.createElement("div"); meta.className = "corr-meta";
+  const tag = document.createElement("button"); tag.className = "chip corr-tag";
+  tag.textContent = c.tag ? "🏷 " + c.tag : "🏷 tag…"; tag.title = "Bấm để sửa tag";
+  tag.onclick = () => editCorrTag(c, tag);
+  const src = document.createElement("span"); src.className = "chip";
+  src.textContent = CORR_SRC[c.source] || c.source;
+  const ct = document.createElement("span"); ct.className = "chip"; ct.textContent = "×" + (c.count || 0);
+  const st = document.createElement("span"); st.className = "chip badge-" + c.status;
+  st.textContent = CORR_ST[c.status] || c.status;
+  meta.append(tag, src, ct, st);
+  const acts = document.createElement("div"); acts.className = "corr-acts";
+  if (c.status !== "approved") acts.append(corrMini("✓ Duyệt", () => patchCorrection(c.id, { status: "approved" }), true));
+  if (c.status !== "rejected") acts.append(corrMini("✕ Loại", () => patchCorrection(c.id, { status: "rejected" })));
+  acts.append(corrMini("🗑", () => deleteCorrection(c)));
+  meta.append(acts);
+  row.append(pair, meta);
+  return row;
+}
+// Re-render cả list sau mỗi hành động (giữ style codebase).
+async function patchCorrection(id, body){
+  try {
+    const r = await fetch("/api/corrections/" + id, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { alert("Lỗi cập nhật cặp sửa lỗi: " + e.message); }
+  loadCorrections();
+}
+async function deleteCorrection(c){
+  if (!confirm(`Xoá cặp "${c.wrong} → ${c.right}"?`)) return;
+  try {
+    const r = await fetch("/api/corrections/" + c.id, { method: "DELETE" });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { alert("Lỗi xoá cặp sửa lỗi: " + e.message); }
+  loadCorrections();
+}
+// Sửa tag inline: Enter lưu, Esc/blur huỷ; chip gợi ý nhanh (mousedown để thắng blur).
+function editCorrTag(c, tagBtn){
+  const wrap = document.createElement("span"); wrap.className = "tag-editwrap";
+  const inp = document.createElement("input");
+  inp.className = "tag-edit"; inp.value = c.tag || ""; inp.placeholder = "tag…";
+  const sugs = document.createElement("span"); sugs.className = "tag-sugs";
+  let done = false;
+  const save = (val) => { if (done) return; done = true; patchCorrection(c.id, { tag: val.trim() }); };
+  const cancel = () => { if (done) return; done = true; wrap.replaceWith(tagBtn); };
+  for (const t of CORR_TAG_SUGS){
+    const s = document.createElement("button"); s.className = "chip"; s.textContent = t;
+    s.onmousedown = (e) => { e.preventDefault(); save(t); };   // trước blur của input
+    sugs.append(s);
+  }
+  wrap.append(inp, sugs);
+  tagBtn.replaceWith(wrap);
+  inp.focus();
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter"){ e.preventDefault(); save(inp.value); }
+    else if (e.key === "Escape"){ e.preventDefault(); cancel(); }
+  };
+  inp.onblur = cancel;
+}
+
 function downloadSub(fmt){
   if (!curDetailId) return;
   const a = document.createElement("a");

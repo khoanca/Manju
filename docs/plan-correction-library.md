@@ -34,13 +34,13 @@ Không train model. "Học" = vòng dữ liệu: user sửa → diff trích cặ
 
 | ID | Task | Source | Dep | Files | Status |
 |-----|------|--------|-----|-------|--------|
-| T-001 | Migration additive: cột `transcripts.edited_text`; bảng `corrections` (`cor-{uuid12}`, wrong, right, tag vùng/accent, source `user\|seed\|remote`, count, status `pending\|approved\|rejected`, timestamps); UNIQUE(wrong,right); rollback ghi lại | US-801, US-802 | ‖ | `app/db.py` | [ ] |
-| T-002 | DB funcs: `set_edited_text`, CRUD corrections (`upsert_correction` count++/auto-approve ≥2, `list_corrections` filter, `set_correction_status`, `delete_correction`) | US-801, US-802 | → T-001 | `app/db.py` | [ ] |
-| T-003 | API: `PATCH /api/transcripts/{id}/text` (body: edited_text, base_version chống ghi đè); CRUD `/api/corrections` — Pydantic models, lỗi tiếng Việt | US-801, US-802 | → T-002 | `app/main.py` | [ ] |
-| T-004 | UI detail: segment click-to-edit + nút Lưu; toggle 3 bản raw/pass-2/edited; badge "đã sửa tay"; export/push dùng edited_text nếu có | US-801 | → T-003 | `app/static/app.js`, `index.html` | [ ] |
-| T-005 | `app/corrections.py`: `extract_pairs(machine, edited)` — difflib token-level, lọc: span thay ≤4 từ, similarity cặp ≥0.3 hoặc cùng số từ, bỏ cặp chỉ khác hoa-thường/dấu câu | US-802 AC1, AC3 | ‖ với T-003 (sau T-001) | `app/corrections.py` (mới) | [ ] |
-| T-006 | Hook: PATCH text → `extract_pairs` (diff vs bản `text` tại thời điểm mở editor, gửi kèm request) → upsert pending | US-802 | → T-003, T-005 | `app/main.py`, `app/corrections.py` | [ ] |
-| T-007 | UI Thư viện (tab Settings): bảng cặp, filter vùng/accent/source/status, duyệt/loại/xoá, sửa tag | US-802 AC2, US-804 | → T-003 | `app/static/app.js`, `index.html` | [ ] |
+| T-001 | Migration additive: cột `transcripts.edited_text`; bảng `corrections` (`cor-{uuid12}`, wrong, right, tag vùng/accent, source `user\|seed\|remote`, count, status `pending\|approved\|rejected`, timestamps); UNIQUE(wrong,right); rollback ghi lại | US-801, US-802 | ‖ | `app/db.py` | [x] |
+| T-002 | DB funcs: `set_edited_text`, CRUD corrections (`upsert_correction` count++/auto-approve ≥2, `list_corrections` filter, `set_correction_status`, `delete_correction`) | US-801, US-802 | → T-001 | `app/db.py` | [x] |
+| T-003 | API: `PATCH /api/transcripts/{id}/text` (body: edited_text, base_version chống ghi đè); CRUD `/api/corrections` — Pydantic models, lỗi tiếng Việt | US-801, US-802 | → T-002 | `app/main.py` | [x] |
+| T-004 | UI detail: segment click-to-edit + nút Lưu; toggle 3 bản raw/pass-2/edited; badge "đã sửa tay"; export/push dùng edited_text nếu có | US-801 | → T-003 | `app/static/app.js`, `index.html` | [x] |
+| T-005 | `app/corrections.py`: `extract_pairs(machine, edited)` — difflib token-level, lọc: span thay ≤4 từ, similarity cặp ≥0.3 hoặc cùng số từ, bỏ cặp chỉ khác hoa-thường/dấu câu | US-802 AC1, AC3 | ‖ với T-003 (sau T-001) | `app/corrections.py` (mới) | [x] |
+| T-006 | Hook: PATCH text → `extract_pairs` (diff vs bản `text` tại thời điểm mở editor, gửi kèm request) → upsert pending | US-802 | → T-003, T-005 | `app/main.py`, `app/corrections.py` | [x] |
+| T-007 | UI Thư viện (tab Settings): bảng cặp, filter vùng/accent/source/status, duyệt/loại/xoá, sửa tag | US-802 AC2, US-804 | → T-003 | `app/static/app.js`, `index.html` | [x] |
 | T-008 | `build_bias(user_glossary) -> str`: merge glossary user + entry approved, rank count desc + recency, cap ký tự (~224 token Whisper); vị trí trong `app/corrections.py` | US-803 AC1 | → T-002 | `app/corrections.py` | [ ] |
 | T-009 | Glossary server-side: key `glossary` trong settings + GET/PUT; client đồng bộ localStorage lên 1 lần rồi đọc từ server | US-803 AC3 | → T-002 | `app/main.py`, `app/db.py`, `app/static/app.js` | [ ] |
 | T-010 | Wire upload: `transcribe._process` gọi `build_bias` cho `DecodeSpec.glossary` + `LlmOpts.glossary`; few-shot pass 2 từ top cặp (thêm vào `_prompt_for`) — try/except never-fail | US-803 AC1, AC2 | → T-008 | `app/transcribe.py`, `app/correct.py` | [ ] |
