@@ -44,7 +44,8 @@ def build_payload(org_id: str, transcript: dict) -> dict:
         "language": transcript["language"],
         "model": transcript.get("model"),
         "duration": transcript.get("duration"),
-        "text": transcript["text"],
+        # Bản user sửa tay (US-801 AC2) là bản chính khi push; fallback bản máy.
+        "text": transcript.get("edited_text") or transcript["text"],
         "raw_text": transcript.get("raw_text"),
         "corrected": bool(transcript.get("corrected")),
         "llm_model": transcript.get("llm_model"),

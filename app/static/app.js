@@ -258,7 +258,9 @@ function startOpfsWriter(){
 }
 
 // ── Detail / result ────────────────────────────────────────────────────────
-let fixedText = "", rawText = null, showingRaw = false, downloadName = "transcript.txt";
+let fixedText = "", rawText = null, editedText = null, downloadName = "transcript.txt";
+let curView = "pass2";      // bản đang xem: "edited" | "pass2" | "raw"
+let baseTextAtOpen = "";    // bản hiệu lực lúc mở editor — gửi làm base_text khi PATCH (US-801)
 let lastBlobUrl = null;
 async function showAudio(id, hasServerAudio){
   const wrap = $("audioWrap"), player = $("player"), dl = $("dlAudio");
@@ -299,13 +301,13 @@ function clusterLabel(spk){
   return "Người " + (idx >= 0 ? idx + 1 : spk + 1);
 }
 
-function setResult(text, raw, segments, id, hasServerAudio, speakerMap){
-  fixedText = text; rawText = raw || null; showingRaw = false;
-  $("result").value = text;
-  $("toggleRaw").style.display = rawText ? "" : "none";
-  $("toggleRaw").textContent = "Bản gốc";
+function setResult(text, raw, segments, id, hasServerAudio, speakerMap, edited){
+  fixedText = text; rawText = raw || null; editedText = edited != null ? edited : null;
+  curView = editedText != null ? "edited" : "pass2";
+  baseTextAtOpen = editedText != null ? editedText : text;
   curSegments = segments; curSpeakerMap = speakerMap || {}; curDetailId = id;
   curHasServerAudio = !!(hasServerAudio && id);
+  applyView();
   renderSegments(segments);
   showAudio(id, hasServerAudio);
 }
@@ -313,12 +315,132 @@ async function openDetail(m){
   showScreen("detail");
   $("detTitle").textContent = m.title || "Bản ghi";
   downloadName = (m.title || m.id).replace(/\.[^.]+$/, "") + ".txt";
-  setResult("Đang tải…", null, null, null, false, null);
+  setResult("Đang tải…", null, null, null, false, null, null);
   await loadSpeakers();
   const d = await (await fetch("/api/transcripts/" + m.id)).json();
-  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map);
+  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map, d.edited_text);
 }
-$("toggleRaw").onclick = () => { showingRaw = !showingRaw; $("result").value = showingRaw ? rawText : fixedText; $("toggleRaw").textContent = showingRaw ? "Bản sửa" : "Bản gốc"; };
+
+// ── US-801: 3 bản (sửa tay / pass 2 / máy thô) + sửa toàn văn & lưu ─────────
+const VIEW_LABELS = { edited: "Bản sửa tay", pass2: "Bản pass 2", raw: "Bản máy thô" };
+const viewText = (v) => (v === "edited" ? editedText : v === "raw" ? rawText : fixedText);
+function viewOrder(){
+  const o = [];
+  if (editedText != null) o.push("edited");
+  o.push("pass2");
+  if (rawText) o.push("raw");
+  return o;
+}
+// Bản hiệu lực (edited ?? pass 2) — dùng cho copy / tải .txt.
+const effectiveText = () => (editedText != null ? editedText : fixedText);
+function applyView(){
+  $("result").value = viewText(curView) || "";
+  $("result").readOnly = curView === "raw";        // bản máy thô chỉ xem
+  const order = viewOrder();
+  const next = order[(order.indexOf(curView) + 1) % order.length];
+  $("toggleRaw").style.display = order.length > 1 ? "" : "none";
+  $("toggleRaw").textContent = "Xem " + VIEW_LABELS[next].toLowerCase();
+  $("editedBadge").classList.toggle("hidden", editedText == null);
+  $("delEdit").style.display = editedText != null ? "" : "none";
+  updateSaveBtn();
+}
+$("toggleRaw").onclick = () => {
+  if (curView !== "raw" && $("result").value !== (viewText(curView) || "")
+      && !confirm("Bỏ nội dung đang sửa chưa lưu?")) return;
+  const order = viewOrder();
+  curView = order[(order.indexOf(curView) + 1) % order.length];
+  applyView();
+};
+// Nút Lưu chỉ hiện khi nội dung khác bản đang xem (không áp dụng cho bản máy thô).
+function updateSaveBtn(){
+  const dirty = curDetailId && curView !== "raw" && $("result").value !== (viewText(curView) || "");
+  $("saveEdit").style.display = dirty ? "" : "none";
+}
+$("result").addEventListener("input", updateSaveBtn);
+
+async function reloadDetail(){
+  if (!curDetailId) return;
+  const d = await (await fetch("/api/transcripts/" + curDetailId)).json();
+  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map, d.edited_text);
+}
+// PATCH bản sửa tay; 409 = bản ghi đã đổi nơi khác → báo + reload. Trả true nếu lưu OK.
+async function patchText(editedVal){
+  const r = await fetch(`/api/transcripts/${curDetailId}/text`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ edited_text: editedVal, base_text: baseTextAtOpen }),
+  });
+  if (r.status === 409){
+    alert("Bản ghi đã thay đổi ở nơi khác, tải lại rồi sửa tiếp.");
+    await reloadDetail();
+    return false;
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return true;
+}
+$("saveEdit").onclick = async () => {
+  if (!curDetailId) return;
+  const text = $("result").value;
+  const b = $("saveEdit"); b.disabled = true;
+  try {
+    if (await patchText(text)){
+      editedText = text; baseTextAtOpen = text; curView = "edited";
+      applyView();
+    }
+  } catch (e) { alert("Lỗi lưu bản sửa: " + e.message); }
+  finally { b.disabled = false; }
+};
+$("delEdit").onclick = async () => {
+  if (!curDetailId || editedText == null) return;
+  if (!confirm("Xoá bản sửa tay? Sẽ dùng lại bản pass 2.")) return;
+  try {
+    if (await patchText(null)){
+      editedText = null; baseTextAtOpen = fixedText; curView = "pass2";
+      applyView();
+    }
+  } catch (e) { alert("Lỗi xoá bản sửa: " + e.message); }
+};
+
+// ── US-801: sửa từng segment inline (click vào text) ───────────────────────
+const occCount = (hay, needle) => { let c = 0, i = -1; while ((i = hay.indexOf(needle, i + 1)) >= 0) c++; return c; };
+// Thay lần xuất hiện thứ n (0-based) của oldStr trong full; không thấy → null.
+function replaceNth(full, oldStr, newStr, n){
+  let idx = -1;
+  for (let i = 0; i <= n; i++){ idx = full.indexOf(oldStr, idx + 1); if (idx < 0) return null; }
+  return full.slice(0, idx) + newStr + full.slice(idx + oldStr.length);
+}
+function editSegment(s, span){
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.className = "seg-edit"; inp.value = s.text;
+  span.replaceWith(inp); inp.focus();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return; done = true;
+    const val = inp.value.trim();
+    if (commit && val && val !== s.text) applySegmentEdit(s, val);
+    span.textContent = s.text;
+    inp.replaceWith(span);
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter"){ e.preventDefault(); finish(true); }
+    else if (e.key === "Escape"){ e.preventDefault(); finish(false); }
+  };
+  inp.onblur = () => finish(true);
+}
+// Cập nhật segment + áp thay thế chuỗi tương ứng vào bản full đang xem.
+// KHÔNG rebuild full bằng join segments (segment là ASR thô — join mất pass 2 chỗ khác).
+function applySegmentEdit(s, val){
+  const old = s.text;
+  let n = 0;   // old là lần xuất hiện thứ mấy, đếm theo các segment đứng trước
+  for (const t of curSegments){ if (t === s) break; n += occCount(t.text, old); }
+  s.text = val;
+  if (curView === "raw") return;                     // bản máy thô chỉ xem, không áp
+  const full = $("result").value;
+  const replaced = replaceNth(full, old, val, n)
+    ?? (full.includes(old) ? full.replace(old, val) : null);
+  if (replaced != null){ $("result").value = replaced; updateSaveBtn(); }
+  // không thấy chuỗi gốc trong bản full → giữ sửa ở segment, bỏ qua phần áp
+}
 function renderSegments(segments){
   const box = $("segList"), btn = $("toggleSegs");
   const wasOpen = box.style.display !== "none";  // giữ trạng thái mở khi vẽ lại (vd sau khi đặt tên)
@@ -342,6 +464,8 @@ function renderSegments(segments){
       p.append(chip);
     }
     const span = document.createElement("span"); span.textContent = s.text;
+    span.className = "seg-txt"; span.title = "Bấm để sửa";
+    span.onclick = () => editSegment(s, span);
     p.append(span); box.appendChild(p);
   }
   box.style.display = wasOpen ? "" : "none";
@@ -436,8 +560,9 @@ $("diarizeBtn").onclick = async () => {
   } catch (e) { alert("Lỗi tách giọng: " + e.message); }
   finally { b.disabled = false; b.textContent = old; }
 };
-$("copy").onclick = () => { navigator.clipboard.writeText($("result").value); $("copy").textContent = "Đã copy!"; setTimeout(()=>$("copy").textContent="Copy",1200); };
-$("download").onclick = () => { const b = new Blob([$("result").value],{type:"text/plain"}); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = downloadName; a.click(); };
+// Copy / tải .txt dùng bản hiệu lực (edited ?? pass 2), không phụ thuộc bản đang xem.
+$("copy").onclick = () => { navigator.clipboard.writeText(effectiveText()); $("copy").textContent = "Đã copy!"; setTimeout(()=>$("copy").textContent="Copy",1200); };
+$("download").onclick = () => { const b = new Blob([effectiveText()],{type:"text/plain"}); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = downloadName; a.click(); };
 
 // ── Upload → transcribe ────────────────────────────────────────────────────
 const fileInput = $("file"), drop = $("drop"), go = $("go");

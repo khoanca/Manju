@@ -202,6 +202,10 @@
   .segs{ margin-top:14px; border-top:1px solid var(--line); padding-top:14px; max-height:320px; overflow-y:auto; }
   .segs .seg{ display:flex; gap:12px; margin:0 0 8px; font-size:14px; align-items:baseline; }
   .segs .seg time{ color:var(--accent); font-variant-numeric:tabular-nums; flex:0 0 auto; font-weight:700; }
+  .segs .seg .seg-txt{ cursor:pointer; border-radius:6px; }
+  .segs .seg .seg-txt:hover{ background:var(--card-2); }
+  .seg-edit{ flex:1 1 auto; min-width:0; border:1px solid var(--accent); border-radius:8px;
+             padding:1px 8px; font-size:14px; background:var(--card); outline:none; }
   .spk-chip{ flex:0 0 auto; color:#fff; font-size:12px; font-weight:700; padding:1px 9px;
              border-radius:999px; border:none; cursor:pointer; white-space:nowrap; }
   .spk-chip:hover{ filter:brightness(1.08); }
@@ -241,7 +245,7 @@
   /* Mobile: form control ≥16px để iOS Safari không tự zoom khi focus */
   @media (max-width:899px){
     .search input, .set-row select, .set-row textarea, #audioDir, #result,
-    .filters select, .filters input{ font-size:16px; }
+    .filters select, .filters input, .seg-edit{ font-size:16px; }
   }
 
   /* Điện thoại nhỏ (<380px): giảm padding & cỡ chữ lớn cho khỏi tràn */
@@ -559,11 +563,14 @@
     <div class="back-row">
       <button class="round-btn" data-back>‹</button>
       <span class="title" id="detTitle">Bản ghi</span>
+      <span class="chip audio hidden" id="editedBadge">✎ đã sửa tay</span>
     </div>
     <div class="det-card">
       <div class="det-actions">
         <button class="mini" id="toggleSegs" style="display:none">Mốc thời gian</button>
-        <button class="mini" id="toggleRaw" style="display:none">Bản gốc</button>
+        <button class="mini" id="toggleRaw" style="display:none">Xem bản khác</button>
+        <button class="mini pri" id="saveEdit" style="display:none">Lưu bản sửa</button>
+        <button class="mini" id="delEdit" style="display:none">Xoá bản sửa tay</button>
         <button class="mini" id="diarizeBtn" style="display:none">Tách giọng</button>
         <button class="mini" id="dlSrt" style="display:none">SRT</button>
         <button class="mini" id="dlVtt" style="display:none">VTT</button>

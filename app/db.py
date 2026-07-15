@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   llm_model  TEXT,
   audio_file TEXT,
   audio_dir  TEXT,
-  speaker_map TEXT  -- JSON {"<local_cluster_idx>": speaker_id | null} (lớp speaker)
+  speaker_map TEXT,  -- JSON {"<local_cluster_idx>": speaker_id | null} (lớp speaker)
+  edited_text TEXT  -- bản user sửa tay (US-801); NULL = chưa sửa, dùng text
 );
 CREATE INDEX IF NOT EXISTS idx_t_created ON transcripts(created_at DESC);
 
@@ -67,6 +68,21 @@ CREATE TABLE IF NOT EXISTS voiceprints (
   created_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_vp_speaker ON voiceprints(speaker_id);
+
+-- Thư viện sửa lỗi (US-802): cặp (sai → đúng) trích từ chỉnh sửa của user,
+-- seed lexicon vùng miền, hoặc nguồn remote. Chỉ entry 'approved' được mồi.
+CREATE TABLE IF NOT EXISTS corrections (
+  id         TEXT PRIMARY KEY,               -- cor-{uuid12}
+  wrong      TEXT NOT NULL,
+  right      TEXT NOT NULL,
+  tag        TEXT NOT NULL DEFAULT '',       -- vùng miền/accent (bac|trung|nam|en_accent|...)
+  source     TEXT NOT NULL DEFAULT 'user',   -- user|seed|remote
+  count      INTEGER NOT NULL DEFAULT 1,
+  status     TEXT NOT NULL DEFAULT 'pending', -- pending|approved|rejected
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(wrong, right)
+);
 """
 
 
@@ -91,6 +107,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(transcripts)")}
     if "speaker_map" not in cols:
         conn.execute("ALTER TABLE transcripts ADD COLUMN speaker_map TEXT")
+    if "edited_text" not in cols:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN edited_text TEXT")
 
 
 # ── Transcripts ────────────────────────────────────────────────────────────
@@ -173,6 +191,8 @@ def read_transcript(transcript_id: str) -> dict | None:
     data = {**_meta(row), "text": row["text"]}
     if row["raw_text"] is not None:
         data["raw_text"] = row["raw_text"]
+    if row["edited_text"] is not None:
+        data["edited_text"] = row["edited_text"]
     if row["segments"] is not None:
         try:
             data["segments"] = json.loads(row["segments"])
@@ -202,6 +222,17 @@ def update_speaker_layer(
                 transcript_id,
             ),
         )
+
+
+def set_edited_text(transcript_id: str, edited_text: str | None) -> bool:
+    """Lưu bản user sửa tay (US-801). None = xoá bản sửa, quay về bản máy.
+    Trả False nếu transcript không tồn tại."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE transcripts SET edited_text = ? WHERE id = ?",
+            (edited_text, transcript_id),
+        )
+    return cur.rowcount > 0
 
 
 def transcript_audio_path(transcript_id: str) -> Path | None:
@@ -325,6 +356,81 @@ def set_transcript_cluster(transcript_id: str, cluster: int, speaker_id: str | N
             (json.dumps(smap, ensure_ascii=False), transcript_id),
         )
     return smap
+
+
+# ── Corrections (thư viện sửa lỗi — US-802) ────────────────────────────────
+def upsert_correction(wrong: str, right: str, tag: str = "", source: str = "user") -> dict:
+    """Thêm cặp (sai → đúng) hoặc cộng count nếu đã có (UNIQUE wrong,right).
+    Cặp lặp ≥2 lần đang pending → tự chuyển approved (US-802 AC2). Trả row dict."""
+    now = datetime.now(UTC).astimezone().isoformat()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, count, status FROM corrections WHERE wrong = ? AND right = ?",
+            (wrong, right),
+        ).fetchone()
+        if row is None:
+            cid = f"cor-{uuid.uuid4().hex[:12]}"
+            conn.execute(
+                """INSERT INTO corrections
+                   (id, wrong, right, tag, source, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (cid, wrong, right, tag, source, now, now),
+            )
+        else:
+            cid = row["id"]
+            status = "approved" if row["status"] == "pending" else row["status"]
+            conn.execute(
+                "UPDATE corrections SET count = count + 1, status = ?, updated_at = ? "
+                "WHERE id = ?",
+                (status, now, cid),
+            )
+        out = conn.execute("SELECT * FROM corrections WHERE id = ?", (cid,)).fetchone()
+    return dict(out)
+
+
+def list_corrections(
+    status: str | None = None, source: str | None = None, tag: str | None = None
+) -> list[dict]:
+    """Liệt kê thư viện, filter optional; cặp gặp nhiều nhất + mới nhất lên đầu."""
+    clauses: list[str] = []
+    params: list[str] = []
+    for col, val in (("status", status), ("source", source), ("tag", tag)):
+        if val is not None:
+            clauses.append(f"{col} = ?")
+            params.append(val)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM corrections{where} ORDER BY count DESC, updated_at DESC",
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_correction_status(correction_id: str, status: str) -> bool:
+    """Duyệt/loại thủ công. Trả False nếu id không tồn tại."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE corrections SET status = ?, updated_at = ? WHERE id = ?",
+            (status, datetime.now(UTC).astimezone().isoformat(), correction_id),
+        )
+    return cur.rowcount > 0
+
+
+def set_correction_tag(correction_id: str, tag: str) -> bool:
+    """Sửa tag vùng miền/accent. Trả False nếu id không tồn tại."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE corrections SET tag = ?, updated_at = ? WHERE id = ?",
+            (tag, datetime.now(UTC).astimezone().isoformat(), correction_id),
+        )
+    return cur.rowcount > 0
+
+
+def delete_correction(correction_id: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM corrections WHERE id = ?", (correction_id,))
+    return cur.rowcount > 0
 
 
 # ── Settings ───────────────────────────────────────────────────────────────

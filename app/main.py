@@ -129,6 +129,28 @@ def api_transcript(transcript_id: str):
     return JSONResponse(data)
 
 
+class EditedTextIn(BaseModel):
+    """Body PATCH text — edited_text=None nghĩa là xoá bản sửa (quay về bản máy)."""
+
+    edited_text: str | None
+    base_text: str | None = None  # bản hiệu lực lúc mở editor — chống ghi đè chéo
+
+
+@app.patch("/api/transcripts/{transcript_id}/text")
+def api_edit_text(transcript_id: str, body: EditedTextIn):
+    """Lưu bản user sửa tay (US-801). base_text lệch với bản hiệu lực hiện tại
+    (edited_text nếu có, không thì text) → 409, UI báo reload."""
+    data = transcribe.read_transcript(transcript_id)
+    if data is None:
+        raise HTTPException(404, "Không tìm thấy bản ghi")
+    current = data.get("edited_text", data["text"])
+    if body.base_text is not None and body.base_text != current:
+        raise HTTPException(409, "Bản ghi đã thay đổi, tải lại trước khi lưu")
+    db.set_edited_text(transcript_id, body.edited_text)
+    # Hook trích cặp (sai → đúng) vào thư viện gắn tại đây (PR2 — T-006).
+    return {"ok": True, "edited_text": body.edited_text}
+
+
 def _speaker_labels(speaker_map: dict | None) -> dict[int, str]:
     """{local_cluster_idx: speaker_id} + bảng speakers → {idx: tên} cho phụ đề."""
     if not speaker_map:
@@ -267,6 +289,42 @@ def api_rename_speaker(speaker_id: str, body: SpeakerIn):
 @app.delete("/api/speakers/{speaker_id}")
 def api_delete_speaker(speaker_id: str):
     db.delete_speaker(speaker_id)
+    return {"ok": True}
+
+
+# ── Thư viện sửa lỗi (US-802) — cặp (sai → đúng) trích từ chỉnh sửa ────────
+@app.get("/api/corrections")
+def api_corrections(
+    status: str | None = None, source: str | None = None, tag: str | None = None
+):
+    return db.list_corrections(status=status, source=source, tag=tag)
+
+
+class CorrectionIn(BaseModel):
+    status: str | None = None  # pending|approved|rejected
+    tag: str | None = None
+
+
+@app.patch("/api/corrections/{correction_id}")
+def api_update_correction(correction_id: str, body: CorrectionIn):
+    if body.status is None and body.tag is None:
+        raise HTTPException(400, "Không có gì để cập nhật (cần status hoặc tag)")
+    if body.status is not None and body.status not in ("pending", "approved", "rejected"):
+        raise HTTPException(400, "status phải là 'pending', 'approved' hoặc 'rejected'")
+    found = True
+    if body.status is not None:
+        found = db.set_correction_status(correction_id, body.status)
+    if body.tag is not None:
+        found = db.set_correction_tag(correction_id, body.tag) and found
+    if not found:
+        raise HTTPException(404, "Không tìm thấy mục sửa lỗi")
+    return {"ok": True}
+
+
+@app.delete("/api/corrections/{correction_id}")
+def api_delete_correction(correction_id: str):
+    if not db.delete_correction(correction_id):
+        raise HTTPException(404, "Không tìm thấy mục sửa lỗi")
     return {"ok": True}
 
 

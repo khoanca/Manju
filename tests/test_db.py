@@ -89,6 +89,97 @@ def test_ensure_columns_adds_speaker_map_to_legacy_db(tmp_db):
     assert "speaker_map" in cols2
 
 
+def test_ensure_columns_adds_edited_text_to_legacy_db(tmp_db):
+    """DB cũ (thiếu edited_text + bảng corrections) → db.init() thêm đủ."""
+    import sqlite3
+    conn = sqlite3.connect(db.DB_PATH)
+    conn.execute("ALTER TABLE transcripts DROP COLUMN edited_text")
+    conn.execute("DROP TABLE corrections")
+    conn.commit()
+    conn.close()
+
+    db.init()  # phải thêm lại cột + bảng, không lỗi
+    with sqlite3.connect(db.DB_PATH) as c2:
+        cols = {r[1] for r in c2.execute("PRAGMA table_info(transcripts)")}
+        tables = {r[0] for r in c2.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "edited_text" in cols
+    assert "corrections" in tables
+
+
+def test_migration_rollback_documented(tmp_db):
+    """Rollback plan (docs/plan-correction-library.md): DROP COLUMN + DROP TABLE
+    chạy được trên DB đã migrate (SQLite ≥3.35)."""
+    import sqlite3
+    with sqlite3.connect(db.DB_PATH) as conn:
+        conn.execute("ALTER TABLE transcripts DROP COLUMN edited_text")
+        conn.execute("DROP TABLE corrections")
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(transcripts)")}
+    assert "edited_text" not in cols
+
+
+def test_set_edited_text_roundtrip(tmp_db):
+    _insert()
+    assert db.set_edited_text("20260101-000000-hop", "triển khai K8s cluster") is True
+    row = db.read_transcript("20260101-000000-hop")
+    assert row["edited_text"] == "triển khai K8s cluster"
+    assert row["text"] == "triển khai Kubernetes"  # bản máy giữ nguyên
+    # Xoá bản sửa (None) → quay về không có key
+    assert db.set_edited_text("20260101-000000-hop", None) is True
+    assert "edited_text" not in db.read_transcript("20260101-000000-hop")
+
+
+def test_set_edited_text_missing_returns_false(tmp_db):
+    assert db.set_edited_text("khong-ton-tai", "x") is False
+
+
+def test_upsert_correction_auto_approves_on_second_hit(tmp_db):
+    first = db.upsert_correction("cu bơ nét", "Kubernetes")
+    assert first["status"] == "pending"
+    assert first["count"] == 1
+    assert first["id"].startswith("cor-")
+    assert first["source"] == "user"
+    # Lần 2: UNIQUE(wrong,right) không nhân đôi, count=2 → tự approved
+    second = db.upsert_correction("cu bơ nét", "Kubernetes")
+    assert second["id"] == first["id"]
+    assert second["count"] == 2
+    assert second["status"] == "approved"
+    assert len(db.list_corrections()) == 1
+
+
+def test_upsert_correction_keeps_rejected_status(tmp_db):
+    cid = db.upsert_correction("dắt cơ", "Docker")["id"]
+    assert db.set_correction_status(cid, "rejected") is True
+    # Đã bị loại thủ công → gặp lại không tự approve
+    assert db.upsert_correction("dắt cơ", "Docker")["status"] == "rejected"
+
+
+def test_list_corrections_filters_and_orders(tmp_db):
+    db.upsert_correction("cu bơ nét", "Kubernetes")
+    db.upsert_correction("cu bơ nét", "Kubernetes")  # count=2, approved
+    db.upsert_correction("mô có", "mô khó", tag="trung", source="seed")
+    rows = db.list_corrections()
+    assert [r["wrong"] for r in rows] == ["cu bơ nét", "mô có"]  # count DESC
+    assert [r["source"] for r in db.list_corrections(source="seed")] == ["seed"]
+    assert db.list_corrections(status="approved")[0]["wrong"] == "cu bơ nét"
+    assert db.list_corrections(tag="trung")[0]["tag"] == "trung"
+    assert db.list_corrections(status="rejected") == []
+
+
+def test_correction_status_tag_delete(tmp_db):
+    cid = db.upsert_correction("gít", "git")["id"]
+    assert db.set_correction_status(cid, "approved") is True
+    assert db.set_correction_tag(cid, "nam") is True
+    row = db.list_corrections()[0]
+    assert (row["status"], row["tag"]) == ("approved", "nam")
+    assert db.delete_correction(cid) is True
+    assert db.list_corrections() == []
+    # id không tồn tại → False
+    assert db.set_correction_status("cor-khongco", "approved") is False
+    assert db.set_correction_tag("cor-khongco", "bac") is False
+    assert db.delete_correction("cor-khongco") is False
+
+
 def test_init_idempotent(tmp_db):
     db.init()
     db.init()  # gọi nhiều lần không lỗi
