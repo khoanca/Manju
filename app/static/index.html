@@ -195,6 +195,15 @@
   .corr-filters select, .corr-filters input{ flex:1 1 110px; min-width:0; border:1px solid var(--line);
             border-radius:11px; padding:8px 10px; font-size:13px; background:var(--card-2); outline:none; }
   .corr-filters select:focus, .corr-filters input:focus{ border-color:var(--accent); }
+  .corr-seed{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:2px 0 8px; }
+  .corr-seed small{ color:var(--muted); }
+  .corr-seed label{ display:flex; align-items:center; gap:5px; font-size:13.5px; cursor:pointer; }
+  .corr-update{ display:flex; gap:8px; margin:0 0 10px; }
+  .corr-update input{ flex:1 1 auto; min-width:0; border:1px solid var(--line); border-radius:11px;
+            padding:8px 10px; font-size:13px; background:var(--card-2); outline:none; }
+  .corr-update input:focus{ border-color:var(--accent); }
+  .corr-update .mini{ flex:0 0 auto; }
+  .corr-update .mini:disabled{ opacity:.45; }
   .corr-item{ padding:12px 0; border-bottom:1px solid var(--line); }
   .corr-item:last-child{ border-bottom:none; padding-bottom:2px; }
   .corr-pair{ font-size:14.5px; overflow-wrap:anywhere; }
@@ -271,7 +280,7 @@
   @media (max-width:899px){
     .search input, .set-row select, .set-row textarea, #audioDir, #result,
     .filters select, .filters input, .seg-edit,
-    .corr-filters select, .corr-filters input, .tag-edit{ font-size:16px; }
+    .corr-filters select, .corr-filters input, .corr-update input, .tag-edit{ font-size:16px; }
   }
 
   /* Điện thoại nhỏ (<380px): giảm padding & cỡ chữ lớn cho khỏi tràn */
@@ -573,6 +582,17 @@
         <div class="set-val" id="corrChevron">▸</div>
       </button>
       <div class="hidden" id="corrBody">
+        <div class="corr-seed">
+          <small>Từ địa phương:</small>
+          <label><input type="checkbox" id="lexBac"/> Bắc</label>
+          <label><input type="checkbox" id="lexTrung"/> Trung</label>
+          <label><input type="checkbox" id="lexNam"/> Nam</label>
+          <label><input type="checkbox" id="lexEn"/> Accent Anh</label>
+        </div>
+        <div class="corr-update">
+          <input id="lexUrl" placeholder="URL nguồn cập nhật (tuỳ chọn)…" />
+          <button class="mini pri" id="lexUpdate" disabled title="Nhập URL nguồn cập nhật trước">Cập nhật thư viện</button>
+        </div>
         <div class="corr-filters">
           <select id="corrStatus" title="Trạng thái">
             <option value="">Tất cả</option>

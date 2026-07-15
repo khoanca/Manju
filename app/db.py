@@ -407,6 +407,36 @@ def list_corrections(
     return [dict(r) for r in rows]
 
 
+def add_corrections_ignore(
+    entries: list[tuple[str, str, str]], source: str, status: str = "approved"
+) -> int:
+    """INSERT OR IGNORE hàng loạt (wrong, right, tag) cho seed/remote (US-804).
+    Cặp đã có (kể cả của user — UNIQUE wrong,right) giữ nguyên, KHÔNG đè,
+    KHÔNG cộng count. Trả số hàng thêm mới."""
+    now = datetime.now(UTC).astimezone().isoformat()
+    added = 0
+    with _connect() as conn:
+        for wrong, right, tag in entries:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO corrections
+                   (id, wrong, right, tag, source, status, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (f"cor-{uuid.uuid4().hex[:12]}", wrong, right, tag, source, status, now, now),
+            )
+            added += cur.rowcount
+    return added
+
+
+def delete_corrections(source: str, tag: str) -> int:
+    """Xoá entry theo nguồn + tag (gỡ seed 1 vùng) — không đụng nguồn khác.
+    Trả số hàng đã xoá."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM corrections WHERE source = ? AND tag = ?", (source, tag)
+        )
+    return cur.rowcount
+
+
 def set_correction_status(correction_id: str, status: str) -> bool:
     """Duyệt/loại thủ công. Trả False nếu id không tồn tại."""
     with _connect() as conn:

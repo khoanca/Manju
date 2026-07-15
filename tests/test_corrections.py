@@ -1,14 +1,27 @@
 """API sửa transcript tay (US-801) + CRUD thư viện sửa lỗi (US-802)
-+ build_bias/top_pairs mồi library vào ASR/pass 2 (US-803) — DB tạm."""
++ build_bias/top_pairs mồi library vào ASR/pass 2 (US-803)
++ seed lexicon vùng miền & cập nhật remote (US-804) — DB tạm."""
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, transcribe
-from app.corrections import BIAS_CAP_CHARS, build_bias, extract_pairs, top_pairs
+from app import corrections, db, transcribe
+from app.corrections import (
+    BIAS_CAP_CHARS,
+    LEXICON_DIR,
+    SEED_REGIONS,
+    build_bias,
+    extract_pairs,
+    import_seed,
+    remove_seed,
+    top_pairs,
+)
 
 
 @pytest.fixture
@@ -380,3 +393,171 @@ def test_live_session_snapshots_bias_at_start(tmp_db, monkeypatch):
     # Library chốt lúc start phiên: vào cả spec ASR lẫn pairs pass 2
     assert session.spec.glossary == "MyTerm, Kubernetes"
     assert session.pairs == (("cu bơ nét", "Kubernetes"),)
+
+
+# ── Seed lexicon vùng miền (T-012, US-804) ─────────────────────────────────
+def _lexicon_entries(region: str) -> list[dict]:
+    return json.loads((LEXICON_DIR / f"{region}.json").read_text(encoding="utf-8"))
+
+
+def test_lexicon_files_parse_and_schema():
+    """4 file seed: JSON hợp lệ, wrong/right non-empty, không cặp trùng
+    trong file lẫn giữa các file (toggle vùng phải độc lập)."""
+    seen_all: set[tuple[str, str]] = set()
+    for region in SEED_REGIONS:
+        entries = _lexicon_entries(region)
+        assert isinstance(entries, list) and entries, region
+        for e in entries:
+            assert set(e) == {"wrong", "right"}, (region, e)
+            assert isinstance(e["wrong"], str) and e["wrong"].strip(), (region, e)
+            assert isinstance(e["right"], str) and e["right"].strip(), (region, e)
+            pair = (e["wrong"], e["right"])
+            assert pair not in seen_all, f"cặp trùng: {region} {pair}"
+            seen_all.add(pair)
+
+
+def test_import_seed_idempotent(tmp_db):
+    n1 = import_seed("trung")
+    assert n1 == len(_lexicon_entries("trung"))
+    assert import_seed("trung") == 0  # chạy lại không nhân đôi
+    rows = db.list_corrections(source="seed", tag="trung")
+    assert len(rows) == n1
+    assert {(r["status"], r["count"]) for r in rows} == {("approved", 1)}
+
+
+def test_import_seed_keeps_user_entry(tmp_db):
+    # User đã có sẵn cặp trùng với seed → giữ nguyên của user, không đè
+    entries = _lexicon_entries("nam")
+    wrong, right = entries[0]["wrong"], entries[0]["right"]
+    db.upsert_correction(wrong, right)
+    assert import_seed("nam") == len(entries) - 1
+    row = next(r for r in db.list_corrections() if (r["wrong"], r["right"]) == (wrong, right))
+    assert (row["source"], row["status"], row["count"]) == ("user", "pending", 1)
+
+
+def test_remove_seed_keeps_user_and_other_regions(tmp_db):
+    import_seed("bac")
+    import_seed("trung")
+    db.upsert_correction("sai user", "đúng user")
+    assert remove_seed("bac") == len(_lexicon_entries("bac"))
+    assert db.list_corrections(source="seed", tag="bac") == []
+    assert len(db.list_corrections(source="seed", tag="trung")) > 0
+    assert len(db.list_corrections(source="user")) == 1
+
+
+def test_settings_toggle_imports_and_removes_seed(client):
+    r = client.put("/api/settings", json={"lexicon_trung": True})
+    assert r.status_code == 200
+    assert r.json()["lexicon"]["trung"] is True
+    assert db.get_setting("lexicon_trung") == "1"
+    assert len(client.get("/api/corrections",
+                          params={"source": "seed", "tag": "trung"}).json()) > 0
+
+    r = client.put("/api/settings", json={"lexicon_trung": False})
+    assert r.status_code == 200
+    assert r.json()["lexicon"]["trung"] is False
+    assert client.get("/api/corrections", params={"source": "seed"}).json() == []
+
+
+def test_settings_toggle_en_maps_to_en_accent(client):
+    # Field lexicon_en ứng với file/tag en_accent
+    client.put("/api/settings", json={"lexicon_en": True})
+    rows = client.get("/api/corrections", params={"source": "seed", "tag": "en_accent"}).json()
+    assert len(rows) == len(_lexicon_entries("en_accent"))
+
+
+def test_settings_get_returns_lexicon_state(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(
+        main.engines, "get_engine",
+        lambda: SimpleNamespace(info=SimpleNamespace(tier="mlx", model_name="m")),
+    )
+    s = client.get("/api/settings").json()
+    assert s["lexicon"] == {"bac": False, "trung": False, "nam": False, "en": False, "url": ""}
+
+
+# ── Cập nhật lexicon online opt-in (T-013, US-804 AC2) ─────────────────────
+class _FakeResp:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.text = content.decode("utf-8")
+
+    def raise_for_status(self):
+        pass
+
+
+def _remote_payload() -> tuple[bytes, str]:
+    data = json.dumps([
+        {"wrong": "đét lai", "right": "deadline", "tag": "en_accent"},
+        {"wrong": "sai x", "right": "đúng x"},
+    ]).encode("utf-8")
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def _mock_lexicon_source(monkeypatch, data: bytes, digest: str):
+    def fake_get(url, **kw):
+        return _FakeResp(digest.encode() if url.endswith(".sha256") else data)
+
+    monkeypatch.setattr(corrections.httpx, "get", fake_get)
+
+
+def test_lexicon_update_without_url_400(client):
+    r = client.post("/api/lexicon/update")
+    assert r.status_code == 400
+    assert "Chưa cấu hình" in r.json()["detail"]
+
+
+def test_lexicon_update_verified_imports(client, monkeypatch):
+    data, digest = _remote_payload()
+    _mock_lexicon_source(monkeypatch, data, digest)
+    db.set_setting("lexicon_url", "https://example.com/lexicon.json")
+    r = client.post("/api/lexicon/update")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "imported": 2}
+    rows = db.list_corrections(source="remote")
+    assert {(x["wrong"], x["right"], x["tag"], x["status"]) for x in rows} == {
+        ("đét lai", "deadline", "en_accent", "approved"),
+        ("sai x", "đúng x", "", "approved"),
+    }
+    # Gọi lại → INSERT OR IGNORE, không nhân đôi
+    assert client.post("/api/lexicon/update").json()["imported"] == 0
+
+
+def test_lexicon_update_bad_checksum_502_table_unchanged(client, monkeypatch):
+    data, _ = _remote_payload()
+    _mock_lexicon_source(monkeypatch, data, "0" * 64)
+    db.set_setting("lexicon_url", "https://example.com/lexicon.json")
+    r = client.post("/api/lexicon/update")
+    assert r.status_code == 502
+    assert "Checksum" in r.json()["detail"]
+    assert client.get("/api/corrections").json() == []
+
+
+def test_lexicon_update_network_error_502(client, monkeypatch):
+    def boom(url, **kw):
+        raise httpx.ConnectError("mạng rớt giả lập")
+
+    monkeypatch.setattr(corrections.httpx, "get", boom)
+    db.set_setting("lexicon_url", "https://example.com/lexicon.json")
+    r = client.post("/api/lexicon/update")
+    assert r.status_code == 502
+    assert client.get("/api/corrections").json() == []
+
+
+def test_lexicon_update_invalid_json_502(client, monkeypatch):
+    data = b"khong phai json"
+    _mock_lexicon_source(monkeypatch, data, hashlib.sha256(data).hexdigest())
+    db.set_setting("lexicon_url", "https://example.com/lexicon.json")
+    r = client.post("/api/lexicon/update")
+    assert r.status_code == 502
+    assert client.get("/api/corrections").json() == []
+
+
+def test_lexicon_update_bad_schema_502(client, monkeypatch):
+    data = json.dumps([{"wrong": "", "right": "x"}]).encode()
+    _mock_lexicon_source(monkeypatch, data, hashlib.sha256(data).hexdigest())
+    db.set_setting("lexicon_url", "https://example.com/lexicon.json")
+    r = client.post("/api/lexicon/update")
+    assert r.status_code == 502
+    assert client.get("/api/corrections").json() == []

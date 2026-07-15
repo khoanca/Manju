@@ -89,6 +89,31 @@ class SettingsIn(BaseModel):
     audio_dir: str | None = None
     diarize_enabled: bool | None = None
     glossary: str | None = None
+    # US-804: bật/tắt seed lexicon theo vùng + URL nguồn cập nhật online (opt-in)
+    lexicon_bac: bool | None = None
+    lexicon_trung: bool | None = None
+    lexicon_nam: bool | None = None
+    lexicon_en: bool | None = None
+    lexicon_url: str | None = None
+
+
+# Field SettingsIn / key settings → vùng seed lexicon (app/data/lexicon/{region}.json)
+_LEXICON_REGIONS = {
+    "lexicon_bac": "bac",
+    "lexicon_trung": "trung",
+    "lexicon_nam": "nam",
+    "lexicon_en": "en_accent",
+}
+
+
+def _lexicon_settings() -> dict:
+    """Trạng thái 4 toggle vùng (default tắt) + URL nguồn cập nhật cho UI."""
+    out: dict = {
+        field.removeprefix("lexicon_"): db.get_setting(field, "0") == "1"
+        for field in _LEXICON_REGIONS
+    }
+    out["url"] = db.get_setting("lexicon_url", "") or ""
+    return out
 
 
 @app.get("/api/settings")
@@ -103,6 +128,7 @@ def api_settings():
             "enabled": transcribe.diarize_enabled(),
             "models_present": diarize.models_present(),
         },
+        "lexicon": _lexicon_settings(),
     }
 
 
@@ -117,10 +143,23 @@ def api_settings_put(body: SettingsIn):
         db.set_setting("diarize_enabled", "1" if body.diarize_enabled else "0")
     if body.glossary is not None:
         db.set_setting("glossary", body.glossary)
+    # US-804: bật vùng → nạp seed vào corrections; tắt → chỉ gỡ entry seed vùng đó
+    for field, region in _LEXICON_REGIONS.items():
+        enabled = getattr(body, field)
+        if enabled is None:
+            continue
+        db.set_setting(field, "1" if enabled else "0")
+        if enabled:
+            corrections.import_seed(region)
+        else:
+            corrections.remove_seed(region)
+    if body.lexicon_url is not None:
+        db.set_setting("lexicon_url", body.lexicon_url.strip())
     return {
         "audio_dir": str(db.get_audio_dir()),
         "diarize_enabled": transcribe.diarize_enabled(),
         "glossary": db.get_setting("glossary", "") or "",
+        "lexicon": _lexicon_settings(),
     }
 
 
@@ -344,6 +383,20 @@ def api_delete_correction(correction_id: str):
     if not db.delete_correction(correction_id):
         raise HTTPException(404, "Không tìm thấy mục sửa lỗi")
     return {"ok": True}
+
+
+@app.post("/api/lexicon/update")
+def api_lexicon_update():
+    """Tải thư viện từ nguồn remote (opt-in, US-804 AC2) — verify sha256 xong
+    mới nhập (INSERT OR IGNORE, source='remote'); lỗi → bảng không đổi."""
+    url = (db.get_setting("lexicon_url", "") or "").strip()
+    if not url:
+        raise HTTPException(400, "Chưa cấu hình nguồn cập nhật thư viện")
+    try:
+        entries = corrections.fetch_remote_lexicon(url)
+    except corrections.LexiconError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"ok": True, "imported": corrections.import_remote(entries)}
 
 
 # ── Đợt 2: đẩy TEXT bản ghi lên org cloud (không audio) ────────────────────

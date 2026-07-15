@@ -1,9 +1,15 @@
 """Trích cặp (sai → đúng) từ diff bản máy vs bản user sửa (US-802)
-+ build bias mồi ASR / few-shot pass 2 từ entry approved (US-803)."""
++ build bias mồi ASR / few-shot pass 2 từ entry approved (US-803)
++ seed lexicon vùng miền & cập nhật remote opt-in (US-804)."""
 from __future__ import annotations
 
+import hashlib
+import json
 import string
 from difflib import SequenceMatcher
+from pathlib import Path
+
+import httpx
 
 from app import db
 
@@ -95,3 +101,73 @@ def top_pairs(limit: int = 20) -> list[tuple[str, str]]:
     except Exception:  # noqa: BLE001
         return []
     return [(r["wrong"], r["right"]) for r in rows[:limit]]
+
+
+# ── Seed lexicon vùng miền + cập nhật remote opt-in (US-804) ───────────────
+LEXICON_DIR = Path(__file__).resolve().parent / "data" / "lexicon"
+SEED_REGIONS = ("bac", "trung", "nam", "en_accent")
+FETCH_TIMEOUT_S = 15.0
+
+
+class LexiconError(Exception):
+    """Nguồn lexicon remote lỗi (mạng/checksum/format) — DB chưa bị ghi gì."""
+
+
+def _validate_entries(data: object) -> list[dict]:
+    """Ép schema [{"wrong","right","tag"?}] — wrong/right phải là str non-empty."""
+    if not isinstance(data, list):
+        raise LexiconError("Format thư viện sai: cần danh sách các cặp {wrong, right}")
+    for e in data:
+        wrong = e.get("wrong") if isinstance(e, dict) else None
+        right = e.get("right") if isinstance(e, dict) else None
+        if not (isinstance(wrong, str) and wrong.strip()
+                and isinstance(right, str) and right.strip()):
+            raise LexiconError(f"Entry lexicon hỏng (thiếu wrong/right): {e!r:.80}")
+    return data
+
+
+def import_seed(region: str) -> int:
+    """Nạp lexicon vùng `region` vào corrections (source='seed', tag=region,
+    status='approved', count=1). INSERT OR IGNORE — không đè/cộng count entry
+    user trùng cặp; chạy lại không nhân đôi. Trả số entry thêm mới."""
+    raw = (LEXICON_DIR / f"{region}.json").read_text(encoding="utf-8")
+    entries = _validate_entries(json.loads(raw))
+    return db.add_corrections_ignore(
+        [(e["wrong"].strip(), e["right"].strip(), region) for e in entries], source="seed"
+    )
+
+
+def remove_seed(region: str) -> int:
+    """Gỡ toàn bộ entry seed của 1 vùng — không đụng entry user/remote."""
+    return db.delete_corrections(source="seed", tag=region)
+
+
+def fetch_remote_lexicon(url: str) -> list[dict]:
+    """Tải lexicon remote theo thiết kế 2 file: GET {url} (data JSON, raw bytes)
+    + GET {url}.sha256 (hex sha256 của raw bytes). Verify xong mới trả entries —
+    lỗi mạng/checksum/format → LexiconError, DB không bị ghi dở dang."""
+    try:
+        data = httpx.get(url, timeout=FETCH_TIMEOUT_S, follow_redirects=True)
+        digest = httpx.get(f"{url}.sha256", timeout=FETCH_TIMEOUT_S, follow_redirects=True)
+        data.raise_for_status()
+        digest.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise LexiconError(f"Không tải được thư viện từ nguồn: {exc}") from exc
+    parts = digest.text.split()  # chấp nhận cả format `<hex>  <tên file>` của sha256sum
+    expected = parts[0].lower() if parts else ""
+    if hashlib.sha256(data.content).hexdigest() != expected:
+        raise LexiconError("Checksum không khớp — file nguồn có thể hỏng hoặc bị thay đổi")
+    try:
+        parsed = json.loads(data.content)
+    except ValueError as exc:
+        raise LexiconError("File thư viện không phải JSON hợp lệ") from exc
+    return _validate_entries(parsed)
+
+
+def import_remote(entries: list[dict]) -> int:
+    """Nạp entries remote đã verify (source='remote', approved). Trả số thêm mới."""
+    rows = [
+        (e["wrong"].strip(), e["right"].strip(), str(e.get("tag") or "").strip())
+        for e in entries
+    ]
+    return db.add_corrections_ignore(rows, source="remote")

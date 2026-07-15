@@ -79,6 +79,11 @@ async function loadServerSettings(){
     $("diarizeHint").textContent = diarizeReady
       ? 'Pass 3 — tách "ai nói câu nào" trong bản ghi mới'
       : "Chưa tải model — chạy: uv run python scripts/fetch_diarize_models.py";
+    // US-804: trạng thái toggle seed lexicon + URL nguồn cập nhật
+    const lex = s.lexicon || {};
+    for (const [id, key] of Object.entries(LEX_IDS)) $(id).checked = !!lex[key];
+    if (document.activeElement !== $("lexUrl")) $("lexUrl").value = lex.url || "";
+    syncLexBtn();
   } catch { $("engineVal").textContent = "—"; }
 }
 $("swDiarize").onclick = async () => {
@@ -647,6 +652,45 @@ async function deleteCorrection(c){
   } catch (e) { alert("Lỗi xoá cặp sửa lỗi: " + e.message); }
   loadCorrections();
 }
+// ── US-804: seed lexicon vùng miền + cập nhật online (opt-in) ──────────────
+const LEX_IDS = { lexBac: "bac", lexTrung: "trung", lexNam: "nam", lexEn: "en" };
+Object.entries(LEX_IDS).forEach(([id, key]) => $(id).addEventListener("change", async () => {
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ["lexicon_" + key]: $(id).checked }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { $(id).checked = !$(id).checked; alert("Lỗi bật/tắt từ địa phương: " + e.message); }
+  loadCorrections();
+}));
+function syncLexBtn(){
+  const has = !!$("lexUrl").value.trim();
+  $("lexUpdate").disabled = !has;
+  $("lexUpdate").title = has ? "Tải cặp mới từ nguồn đã cấu hình" : "Nhập URL nguồn cập nhật trước";
+}
+$("lexUrl").addEventListener("input", syncLexBtn);
+$("lexUrl").addEventListener("change", () => putLexiconUrl($("lexUrl").value.trim()));
+async function putLexiconUrl(url){
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lexicon_url: url }),
+    });
+    if (!r.ok) throw new Error(r.statusText);
+  } catch (e) { console.warn("Chưa sync URL thư viện lên server:", e.message); }
+}
+$("lexUpdate").onclick = async () => {
+  await putLexiconUrl($("lexUrl").value.trim());  // chốt URL trước khi gọi update
+  try {
+    const r = await fetch("/api/lexicon/update", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    alert(`Đã nhập ${d.imported} cặp mới.`);
+    loadCorrections();
+  } catch (e) { alert("Lỗi cập nhật thư viện: " + e.message); }
+};
+
 // Sửa tag inline: Enter lưu, Esc/blur huỷ; chip gợi ý nhanh (mousedown để thắng blur).
 function editCorrTag(c, tagBtn){
   const wrap = document.createElement("span"); wrap.className = "tag-editwrap";
