@@ -6,6 +6,9 @@
 - **Next Step**: Chạy `/plan-feature` cho hạng mục kế tiếp của Đợt 1 (xem PRD ưu tiên), hoặc `/audit-plan` để soát tiến độ vs BRD/PRD.
 
 ## Active Feature
+**Correction Library** (branch `feat/correction-library`, stack lên `feat/speaker-layer`) — **Plan Approved** 2026-07-15. Plan: [docs/plan-correction-library.md](plan-correction-library.md), PRD stub FR-6. Sửa transcript + thư viện tự học (không train model): diff trích cặp sai→đúng → bảng `corrections` → mồi vào Whisper initial_prompt + pass 2; seed lexicon 3 miền + accent Anh (online update opt-in); rolling context live. 5 PR stacked (T-001..T-015). Đang code PR1 (schema + PATCH text + UI sửa segment).
+
+### Feature trước
 **Speaker Layer** (branch `feat/speaker-layer`, từ `main`) — **Implemented** 2026-07-14. Plan: [docs/plan-speaker-layer.md](plan-speaker-layer.md). Diarization + nhận diện giọng (voiceprint) qua sherpa-onnx (offline, không token HF), giữ mlx-whisper. 4 PR: timestamp+SRT/VTT → diarize pass → đặt tên thủ công → voiceprint enroll+auto-ID. 59 test xanh (ruff+mypy). Files: `app/{diarize,subtitle}.py` (mới), `app/{engines,db,transcribe,main}.py`, `app/static/{app.js,index.html}`, `scripts/fetch_diarize_models.py`, `tests/test_{subtitle,diarize,speakers_api,voiceprint}.py`. Setting `diarize_enabled` mặc định off; model tải qua `uv run python scripts/fetch_diarize_models.py` (~33MB, gitignored). Còn lại: chưa merge vào main (cần review người); billing/credit-wallet branch tách riêng.
 
 ## Features Backlog

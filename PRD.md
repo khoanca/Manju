@@ -56,6 +56,10 @@ Hệ thống theo mô hình **local-first + org sync**:
 
 - Thực thi quyền bằng RLS ngay trong Postgres (không tin client).
 
+### FR-6 — Correction Library: sửa transcript + thư viện tự học (net-new 2026-07-15)
+- User sửa transcript (bản máy giữ nguyên); app trích cặp (sai → đúng) vào thư viện có duyệt, tự mồi vào ASR + pass 2 các lần sau. Seed lexicon từ địa phương Bắc/Trung/Nam + accent Anh, cập nhật online opt-in. Rolling context cho live subtitle.
+- Không fine-tune model (local-first, không GPU/training). Chi tiết US-801..805, AC, task: `docs/plan-correction-library.md`.
+
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).
 - Sync audio lên org.
