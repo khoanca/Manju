@@ -17,7 +17,7 @@ import re
 import sys
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +44,14 @@ class DecodeSpec:
     language: str
     glossary: str = ""
     model_override: str | None = None  # chỉ tier CPU dùng (user chọn size model)
+    flag_words: bool = False  # final decode kèm (word, probability) để flag từ đáng ngờ
+
+
+@dataclass(frozen=True)
+class DecodeResult:
+    text: str
+    min_logprob: float = 0.0  # min avg_logprob trên các segment GIỮ LẠI; 0.0 nếu không có
+    words: tuple[tuple[str, float], ...] = ()  # (word, probability), chỉ khi flag_words + final
 
 
 class DecodeBusy(Exception):
@@ -74,6 +82,10 @@ class Engine(ABC):
 
     def decode(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> str:
         """Decode 1 utterance cho live. final=False có thể raise DecodeBusy."""
+        return self.decode_scored(audio, spec, final=final).text
+
+    def decode_scored(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> DecodeResult:
+        """Như decode nhưng kèm điểm tin cậy. final=False có thể raise DecodeBusy."""
         if final:
             with _decode_lock:
                 return self._decode(audio, spec, final=True)
@@ -84,8 +96,12 @@ class Engine(ABC):
         finally:
             _decode_lock.release()
 
+    def revise(self, audio: np.ndarray, spec: DecodeSpec) -> str | None:
+        """Re-decode nền với setting mạnh hơn. None = không hỗ trợ / đang bận."""
+        return None
+
     @abstractmethod
-    def _decode(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> str: ...
+    def _decode(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> DecodeResult: ...
 
     @abstractmethod
     def transcribe_file(
@@ -94,6 +110,49 @@ class Engine(ABC):
         spec: DecodeSpec,
         on_progress: Callable[[str, float], None],
     ) -> FileResult: ...
+
+
+def _mlx_scored(segments: list[dict], *, with_words: bool) -> DecodeResult:
+    kept = [
+        seg
+        for seg in segments
+        if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
+    ]
+    words: tuple[tuple[str, float], ...] = ()
+    if with_words:
+        words = tuple(
+            (w["word"], float(w["probability"])) for seg in kept for w in seg.get("words", [])
+        )
+    return DecodeResult(
+        "".join(seg["text"] for seg in kept).strip(),
+        min((float(seg.get("avg_logprob", 0.0)) for seg in kept), default=0.0),
+        words,
+    )
+
+
+def _fw_scored(segments: Iterable[object], *, with_words: bool) -> DecodeResult:
+    # getattr thay vì attribute: faster_whisper không ship type stubs (Segment/Word).
+    kept = [
+        seg
+        for seg in segments
+        if keep_segment(
+            str(getattr(seg, "text", "")),
+            getattr(seg, "no_speech_prob", 0.0),
+            getattr(seg, "avg_logprob", 0.0),
+        )
+    ]
+    words: tuple[tuple[str, float], ...] = ()
+    if with_words:
+        words = tuple(
+            (str(getattr(w, "word", "")), float(getattr(w, "probability", 0.0)))
+            for seg in kept
+            for w in (getattr(seg, "words", None) or [])
+        )
+    return DecodeResult(
+        "".join(str(getattr(seg, "text", "")) for seg in kept).strip(),
+        min((float(getattr(seg, "avg_logprob", 0.0)) for seg in kept), default=0.0),
+        words,
+    )
 
 
 class MlxEngine(Engine):
@@ -109,7 +168,7 @@ class MlxEngine(Engine):
         self._repo = os.environ.get("LIVE_MLX_MODEL", "mlx-community/whisper-large-v3-turbo")
         self.info = EngineInfo("mlx", f"{self._repo.rsplit('/', 1)[-1]} (mlx)")
 
-    def _transcribe(self, audio, spec: DecodeSpec, final: bool) -> dict:
+    def _transcribe(self, audio, spec: DecodeSpec, final: bool, *, word_timestamps: bool = False) -> dict:
         return self._mlx.transcribe(
             audio,
             path_or_hf_repo=self._repo,
@@ -118,16 +177,37 @@ class MlxEngine(Engine):
             initial_prompt=spec.glossary or None,
             # final: cho phép fallback nhiệt độ khi đoạn "khó"; partial: 1 lần cho nhanh.
             temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0) if final else 0.0,
+            word_timestamps=word_timestamps,
             verbose=None,
         )
 
     def _decode(self, audio, spec, *, final):
-        result = self._transcribe(audio, spec, final)
-        return "".join(
-            seg["text"]
-            for seg in result["segments"]
-            if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
-        ).strip()
+        with_words = spec.flag_words and final
+        result = self._transcribe(audio, spec, final, word_timestamps=with_words)
+        return _mlx_scored(result["segments"], with_words=with_words)
+
+    def revise(self, audio: np.ndarray, spec: DecodeSpec) -> str | None:
+        # mlx-whisper 0.4.3 raise NotImplementedError với beam_size (chưa có beam
+        # search) → except trả None; tự chạy khi upstream bổ sung. temperature phải
+        # 0.0: DecodingOptions cấm trộn beam + sampling.
+        if not _decode_lock.acquire(blocking=False):
+            return None
+        try:
+            result = self._mlx.transcribe(
+                audio,
+                path_or_hf_repo=self._repo,
+                language=spec.language,
+                condition_on_previous_text=False,
+                initial_prompt=spec.glossary or None,
+                temperature=0.0,
+                beam_size=5,
+                verbose=None,
+            )
+            return _mlx_scored(result["segments"], with_words=False).text
+        except Exception:  # noqa: BLE001 — revise chạy nền, never-fail
+            return None
+        finally:
+            _decode_lock.release()
 
     def transcribe_file(self, path, spec, on_progress):
         # Giữ lock suốt file: Metal không share được với decode live. Upload
@@ -183,12 +263,14 @@ class FwEngine(Engine):
             initial_prompt=spec.glossary or None,
             hotwords=spec.glossary or None,
         )
+        with_words = spec.flag_words and final
         if final:
             segments, _ = model.transcribe(
                 audio,
                 beam_size=5,
                 vad_filter=True,
                 temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                word_timestamps=with_words,
                 **common,
             )
         else:
@@ -200,11 +282,35 @@ class FwEngine(Engine):
                 without_timestamps=True,
                 **common,
             )
-        return "".join(
-            seg.text
-            for seg in segments
-            if keep_segment(seg.text, getattr(seg, "no_speech_prob", 0.0), getattr(seg, "avg_logprob", 0.0))
-        ).strip()
+        return _fw_scored(segments, with_words=with_words)
+
+    def revise(self, audio: np.ndarray, spec: DecodeSpec) -> str | None:
+        if self.device != "cpu":
+            return None  # cuda: final đã large-v3-turbo beam-5, không có nấc mạnh hơn
+        try:
+            # Lấy model upload (to hơn model live) TRƯỚC khi thử lock: lần load
+            # đầu ~10s không được giữ lock chặn partial của phiên live.
+            model = self._get_model(self.upload_model)
+        except Exception:  # noqa: BLE001 — revise chạy nền, never-fail
+            return None
+        if not _decode_lock.acquire(blocking=False):
+            return None
+        try:
+            segments, _ = model.transcribe(
+                audio,
+                language=spec.language,
+                beam_size=5,
+                vad_filter=True,
+                temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                condition_on_previous_text=False,
+                initial_prompt=spec.glossary or None,
+                hotwords=spec.glossary or None,
+            )
+            return _fw_scored(segments, with_words=False).text
+        except Exception:  # noqa: BLE001 — revise chạy nền, never-fail
+            return None
+        finally:
+            _decode_lock.release()
 
     def transcribe_file(self, path, spec, on_progress):
         # CPU/CUDA decode song song được với live → không cần giữ _decode_lock.
