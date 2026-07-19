@@ -208,6 +208,60 @@ def test_delete_speaker_removes_voiceprint(tmp_db):
     assert db.load_voiceprints() == []
 
 
+# ── speaker_terms (từ vựng cá nhân theo người nói) ─────────────────────────
+def test_replace_speaker_terms_idempotent(tmp_db):
+    sid = db.find_or_create_speaker("An")
+    rows = [(sid, "Kubernetes", 3), (sid, "redis", 2)]
+    assert db.replace_speaker_terms("t-1", rows) == 2
+    # Ghi lại cùng transcript → thay thế, không nhân đôi
+    assert db.replace_speaker_terms("t-1", rows) == 2
+    assert db.personal_terms([sid]) == ["Kubernetes", "redis"]
+
+
+def test_personal_terms_aggregates_orders_limits(tmp_db):
+    a = db.find_or_create_speaker("An")
+    b = db.find_or_create_speaker("Bình")
+    db.replace_speaker_terms("t-1", [(a, "redis", 1), (a, "Kubernetes", 2)])
+    db.replace_speaker_terms("t-2", [(a, "redis", 4), (b, "GitHub", 3)])
+    # SUM(count) qua mọi transcript: redis=5, GitHub=3, Kubernetes=2
+    assert db.personal_terms([a, b]) == ["redis", "GitHub", "Kubernetes"]
+    assert db.personal_terms([a, b], limit=1) == ["redis"]
+    assert db.personal_terms([b]) == ["GitHub"]
+    assert db.personal_terms([]) == []
+
+
+def test_delete_speaker_removes_speaker_terms(tmp_db):
+    sid = db.find_or_create_speaker("An")
+    db.replace_speaker_terms("t-1", [(sid, "redis", 1)])
+    db.delete_speaker(sid)
+    assert db.personal_terms([sid]) == []
+
+
+# ── Vùng miền giọng của speaker ────────────────────────────────────────────
+def test_speaker_region_roundtrip_and_list(tmp_db):
+    sid = db.find_or_create_speaker("An")
+    assert db.list_speakers()[0]["region"] is None
+    db.set_speaker_region(sid, "nam")
+    assert db.list_speakers()[0]["region"] == "nam"
+    db.set_speaker_region(sid, None)
+    assert db.list_speakers()[0]["region"] is None
+
+
+def test_ensure_columns_adds_region_to_legacy_db(tmp_db):
+    """DB cũ (speakers thiếu region) → db.init() tự ALTER thêm cột, idempotent."""
+    import sqlite3
+    with sqlite3.connect(db.DB_PATH) as conn:
+        conn.execute("ALTER TABLE speakers DROP COLUMN region")
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(speakers)")}
+    assert "region" not in cols
+
+    db.init()  # thêm lại cột
+    db.init()  # gọi lần nữa không lỗi (idempotent)
+    with sqlite3.connect(db.DB_PATH) as c2:
+        cols2 = {r[1] for r in c2.execute("PRAGMA table_info(speakers)")}
+    assert "region" in cols2
+
+
 def test_list_orders_newest_first(tmp_db):
     _insert(tid="20260101-000000-a")
     db.insert_transcript(db.TranscriptRecord(

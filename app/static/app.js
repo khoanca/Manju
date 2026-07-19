@@ -79,6 +79,8 @@ async function loadServerSettings(){
     $("diarizeHint").textContent = diarizeReady
       ? 'Pass 3 — tách "ai nói câu nào" trong bản ghi mới'
       : "Chưa tải model — chạy: uv run python scripts/fetch_diarize_models.py";
+    // Toggle "0"/"1" phía server: đánh dấu từ nghe không rõ + khử ồn mic
+    for (const [id, key] of Object.entries(SRV_SW)) $(id).classList.toggle("on", s[key] === "1");
     // US-804: trạng thái toggle seed lexicon + URL nguồn cập nhật
     const lex = s.lexicon || {};
     for (const [id, key] of Object.entries(LEX_IDS)) $(id).checked = !!lex[key];
@@ -99,6 +101,17 @@ $("swDiarize").onclick = async () => {
     });
   } catch { $("swDiarize").classList.toggle("on"); }
 };
+// Toggle server-backed dạng chuỗi "0"/"1" (flag từ nghe không rõ, khử ồn mic).
+const SRV_SW = { swFlagWords: "flag_words", swDenoise: "denoise_enabled" };
+Object.keys(SRV_SW).forEach(id => $(id).onclick = async () => {
+  const on = $(id).classList.toggle("on");
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [SRV_SW[id]]: on ? "1" : "0" }),
+    });
+  } catch { $(id).classList.toggle("on"); }
+});
 $("saveAudioDir").onclick = async () => {
   const msg = $("audioDirMsg");
   try {
@@ -546,12 +559,23 @@ async function loadSpeakerList(){
     const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = s.name;
     const ct = document.createElement("span"); ct.className = "ct";
     ct.textContent = s.voiceprints ? `${s.voiceprints} mẫu giọng` : "chưa có mẫu giọng";
+    const rg = document.createElement("select"); rg.title = "Giọng miền nào";
+    for (const [v, lbl] of SPK_REGIONS){
+      const o = document.createElement("option"); o.value = v; o.textContent = lbl; rg.append(o);
+    }
+    rg.value = s.region || "";
+    rg.onchange = () => setSpeakerRegion(s.id, rg.value);
     const ren = document.createElement("button"); ren.className = "mini"; ren.textContent = "Đổi tên";
     ren.onclick = () => renameSpeaker(s.id, s.name);
     const del = document.createElement("button"); del.className = "mini"; del.textContent = "Xoá";
     del.onclick = () => deleteSpeaker(s.id, s.name);
-    row.append(nm, ct, ren, del); box.appendChild(row);
+    row.append(nm, ct, rg, ren, del); box.appendChild(row);
   }
+}
+const SPK_REGIONS = [["", "(trống)"], ["bac", "Bắc"], ["trung", "Trung"], ["nam", "Nam"]];
+async function setSpeakerRegion(id, region){
+  await fetch(`/api/speakers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ region }) });
+  loadSpeakerList();
 }
 async function renameSpeaker(id, cur){
   const name = prompt("Đổi tên người:", cur);
@@ -875,13 +899,62 @@ const subs = $("subtitles"), recTimer = $("recTimer"), recPill = $("recPill"), r
 let live = null;   // {conn, ctx, stream, opfs, stopping, deadline, paused, base, resumeAt, timer}
 let tw = null;
 
-function enterRecord(){ showScreen("record"); if (!live) startLive(); }
+function enterRecord(){
+  showScreen("record");
+  if (live){ showStartCard(false); return; }   // đang ghi → về thẳng màn ghi
+  showStartCard(true);
+  loadParticipants();
+}
+function showStartCard(on){
+  $("startCard").classList.toggle("hidden", !on);
+  $("recBody").classList.toggle("hidden", on);
+}
+
+// ── Thẻ chuẩn bị: tên họp + agenda + người tham gia (nhớ lần trước) ────────
+const PART_KEY = "manju.participants";
+let partList = [];   // speakers đang hiện checkbox, giữ nguyên kiểu id
+async function loadParticipants(){
+  const box = $("mtParticipants");
+  box.innerHTML = ""; partList = [];
+  box.classList.add("hidden"); $("mtPartLbl").classList.add("hidden");
+  let arr = [];
+  try { arr = await (await fetch("/api/speakers")).json(); } catch { return; }   // lỗi → ẩn list, vẫn cho Bắt đầu
+  if (!arr.length) return;
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(PART_KEY)) || []; } catch {}
+  const savedIds = saved.map(String);
+  partList = arr;
+  for (const s of arr){
+    const lb = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = savedIds.includes(String(s.id));
+    lb.append(cb, " " + s.name);
+    box.appendChild(lb);
+  }
+  box.classList.remove("hidden"); $("mtPartLbl").classList.remove("hidden");
+}
+function checkedParticipants(){
+  const ids = [];
+  $("mtParticipants").querySelectorAll("input").forEach((cb, i) => { if (cb.checked && partList[i]) ids.push(partList[i].id); });
+  return ids;
+}
+$("startBtn").onclick = () => {
+  if (live) return;
+  const ids = checkedParticipants();
+  localStorage.setItem(PART_KEY, JSON.stringify(ids));
+  const meta = {};
+  if (ids.length) meta.participants = ids;
+  const title = $("mtTitle").value.trim(); if (title) meta.title = title;
+  const agenda = $("mtAgenda").value.trim(); if (agenda) meta.agenda = agenda;
+  showStartCard(false);
+  startLive(meta);
+};
 function setPill(text, on){ recPill.innerHTML = `<span class="dot"></span> ${text}`; recPill.classList.toggle("live", !!on); }
 function setWave(state){ wave.classList.toggle("on", state === "on"); wave.classList.toggle("paused", state === "paused"); }
 
 function tickTimer(){ if (!live) return; const el = live.base + (live.paused ? 0 : (Date.now() - live.resumeAt)/1000); recTimer.textContent = fmtClock(el); }
 
-async function startLive(){
+async function startLive(meta){
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
@@ -898,7 +971,7 @@ async function startLive(){
   const useOpfs = storeAudioLocal && HAS_OPFS;
   const conn = new LiveConn(
     { type:"start", language:$("lang").value, glossary:$("prompt").value,
-      correct:$("correct").checked, store_audio: !useOpfs },
+      correct:$("correct").checked, store_audio: !useOpfs, ...(meta || {}) },
     handleLiveMsg,
     (state) => {
       if (!live) return;
@@ -938,11 +1011,14 @@ function handleLiveMsg(m){
   } else if (m.type === "final"){
     stopTypewriter(m.utt); const el = subEl(m.utt);
     if (!m.text){ el.remove(); return; }
-    el.textContent = m.text; el.classList.remove("partial"); autoscroll();
-  } else if (m.type === "corrected"){
-    if (!m.changed) return;
+    setLine(el, m.text); el.classList.remove("partial"); autoscroll();
+  } else if (m.type === "corrected" || m.type === "revise"){
+    if (m.type === "corrected" && !m.changed) return;
     const el = subs.querySelector(`[data-utt="${m.utt}"]`);
-    if (el){ el.textContent = m.text; el.classList.remove("fixed"); void el.offsetWidth; el.classList.add("fixed"); }
+    if (el){ setLine(el, m.text); el.classList.remove("fixed"); void el.offsetWidth; el.classList.add("fixed"); }
+  } else if (m.type === "speaker"){
+    const el = subs.querySelector(`[data-utt="${m.utt}"]`);
+    if (el){ el.dataset.spk = m.name; setLine(el, el.dataset.raw != null ? el.dataset.raw : el.textContent); }
   } else if (m.type === "saved"){
     const id = m.transcript_id;
     const opfsDone = live && live.opfs ? live.opfs.finish() : Promise.resolve(null);
@@ -957,6 +1033,8 @@ function handleLiveMsg(m){
   }
 }
 function subEl(utt){ let el = subs.querySelector(`[data-utt="${utt}"]`); if (!el){ el = document.createElement("p"); el.className = "line"; el.dataset.utt = utt; subs.appendChild(el); } return el; }
+// Vẽ 1 dòng subtitle: giữ text gốc trong dataset.raw, thêm "Tên: " nếu đã biết người nói.
+function setLine(el, text){ el.dataset.raw = text; el.textContent = el.dataset.spk ? el.dataset.spk + ": " + text : text; }
 function startTypewriter(utt, el){ if (tw) stopTypewriter(tw.utt); tw = { utt, el, displayed:"", target:"", timer:setInterval(revealWord, 70) }; }
 function retarget(text){ if (!tw) return; let p = 0; while (p < tw.displayed.length && p < text.length && tw.displayed[p] === text[p]) p++; if (p < tw.displayed.length){ tw.displayed = tw.displayed.slice(0, p); tw.el.textContent = tw.displayed; } tw.target = text; }
 function revealWord(){ if (!tw || tw.displayed.length >= tw.target.length) return; const rest = tw.target.slice(tw.displayed.length); const m = rest.match(/^\s*\S+/); tw.displayed += m ? m[0] : rest; tw.el.textContent = tw.displayed; autoscroll(); }
@@ -1012,4 +1090,5 @@ loadSettings();
 loadServerSettings();
 loadHistory();
 // Deep-link tiện dụng (và để xem trước từng màn): #settings / #upload / #record.
-if (["#settings","#upload","#record"].includes(location.hash)) showScreen(location.hash.slice(1));
+if (location.hash === "#record") enterRecord();
+else if (["#settings","#upload"].includes(location.hash)) showScreen(location.hash.slice(1));

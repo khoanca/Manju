@@ -138,6 +138,16 @@
   #subtitles .line.fixed{ animation:flash 1.3s ease-out; }
   @keyframes flash{ from{ background:var(--accent-soft); } to{ background:transparent; } }
 
+  /* Thẻ chuẩn bị trước khi ghi: tên họp + agenda + người tham gia */
+  .start-card{ background:var(--card); border-radius:24px; padding:20px; box-shadow:var(--sh);
+               display:flex; flex-direction:column; gap:8px; }
+  .start-card input, .start-card textarea{ border:1px solid var(--line); border-radius:12px;
+               padding:10px 12px; font-size:14px; background:var(--card-2); outline:none; resize:vertical; }
+  .start-card input:focus, .start-card textarea:focus{ border-color:var(--accent); }
+  .mt-parts{ display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:2px; }
+  .mt-parts label{ display:flex; align-items:center; gap:6px; font-size:14px; cursor:pointer; }
+  .start-card .go-btn{ margin-top:10px; }
+
   .rec-controls{ display:flex; gap:14px; margin-top:20px; }
   .btn-pause{ flex:1 1 auto; background:var(--card); border-radius:40px; padding:16px; box-shadow:var(--sh-sm);
               font-weight:700; font-size:15px; display:flex; align-items:center; justify-content:center; gap:8px; }
@@ -248,6 +258,8 @@
   .spk-row .nm{ font-weight:600; flex:1 1 auto; }
   .spk-row .ct{ color:var(--faint); font-size:12px; flex:0 0 auto; }
   .spk-row .mini{ flex:0 0 auto; }
+  .spk-row select{ flex:0 0 auto; border:1px solid var(--line); border-radius:10px;
+                   padding:5px 8px; font-size:13px; background:var(--card-2); outline:none; }
 
   /* upload */
   .drop{ border:2px dashed #d7dbe1; border-radius:18px; padding:34px 20px; text-align:center; color:var(--muted);
@@ -280,7 +292,8 @@
   @media (max-width:899px){
     .search input, .set-row select, .set-row textarea, #audioDir, #result,
     .filters select, .filters input, .seg-edit,
-    .corr-filters select, .corr-filters input, .corr-update input, .tag-edit{ font-size:16px; }
+    .corr-filters select, .corr-filters input, .corr-update input, .tag-edit,
+    .start-card input, .start-card textarea, .spk-row select{ font-size:16px; }
   }
 
   /* Điện thoại nhỏ (<380px): giảm padding & cỡ chữ lớn cho khỏi tràn */
@@ -472,6 +485,18 @@
       <span class="title">Recording</span>
     </div>
 
+    <!-- Thẻ chuẩn bị: tên họp + agenda + người tham gia, bấm Bắt đầu mới ghi -->
+    <div class="start-card" id="startCard">
+      <span class="f-lbl">Tên cuộc họp</span>
+      <input id="mtTitle" placeholder="VD: Họp sprint tuần này…" />
+      <span class="f-lbl">Agenda</span>
+      <textarea id="mtAgenda" rows="2" placeholder="Nội dung dự kiến (tuỳ chọn)…"></textarea>
+      <span class="f-lbl hidden" id="mtPartLbl">Người tham gia</span>
+      <div class="mt-parts hidden" id="mtParticipants"></div>
+      <button class="go-btn" id="startBtn">Bắt đầu</button>
+    </div>
+
+    <div id="recBody" class="hidden" style="display:contents">
     <div class="hero">
       <span class="spark" style="left:22px;top:26px">✦</span>
       <span class="spark" style="right:30px;bottom:60px;font-size:14px">✦</span>
@@ -491,6 +516,7 @@
       <button class="btn-stop" id="recStop">■ Stop</button>
     </div>
     <div class="rec-hint" id="recHint">Bấm Stop để kết thúc — văn bản &amp; file ghi âm tự lưu.</div>
+    </div>
   </section>
 
   <!-- ══════ SETTINGS ══════ -->
@@ -535,6 +561,16 @@
         <div class="set-ico">🗣️</div>
         <div class="set-main"><b>Nhận diện người nói</b><small id="diarizeHint">Pass 3 — tách "ai nói câu nào" (cần tải model)</small></div>
         <div class="sw" id="swDiarize"></div>
+      </div>
+      <div class="set-row" id="rowFlagWords">
+        <div class="set-ico">🚩</div>
+        <div class="set-main"><b>Đánh dấu từ nghe không rõ cho pass 2</b><small>Chậm hơn một chút</small></div>
+        <div class="sw" id="swFlagWords"></div>
+      </div>
+      <div class="set-row" id="rowDenoise">
+        <div class="set-ico">🎛️</div>
+        <div class="set-main"><b>Khử ồn micro</b><small>Thử nghiệm</small></div>
+        <div class="sw" id="swDenoise"></div>
       </div>
     </div>
 

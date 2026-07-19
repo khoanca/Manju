@@ -52,6 +52,7 @@ class LlmOpts:
     num_ctx: int = 8192  # chỉ backend Ollama dùng
     timeout: float = TIMEOUT_S
     pairs: tuple[tuple[str, str], ...] = ()  # few-shot (sai → đúng) từ thư viện (US-803)
+    uncertain: tuple[str, ...] = ()  # cụm word-confidence thấp từ ASR (US-812)
 
 _SYSTEM_PROMPT = (
     "Bạn là công cụ soát lỗi transcript cuộc họp tiếng Việt có pha thuật ngữ "
@@ -71,6 +72,7 @@ def _prompt_for(
     glossary: str,
     context: str = "",
     pairs: tuple[tuple[str, str], ...] = (),
+    uncertain: tuple[str, ...] = (),
 ) -> str:
     parts = []
     if pairs:
@@ -84,6 +86,9 @@ def _prompt_for(
             "Các câu ngay trước đó trong cuộc họp (chỉ để hiểu ngữ cảnh, "
             "KHÔNG đưa vào kết quả):\n" + context
         )
+    if uncertain:
+        # US-812: ASR tự báo chỗ nghe không chắc — LLM soát mạnh tay đúng chỗ.
+        parts.append("Các cụm nghe không rõ, ưu tiên soát kỹ: " + ", ".join(uncertain))
     parts.append("Text cần soát:\n" + chunk)
     return "\n\n".join(parts)
 
@@ -159,12 +164,12 @@ def _chat_openrouter(client: httpx.Client, system: str, user: str, opts: LlmOpts
 
 def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
     # US-805: Ollama cũng nhận context như OpenRouter — cùng 1 chỗ build prompt.
-    user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs)
+    user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs, opts.uncertain)
     return _guard(chunk, _chat_ollama(client, _SYSTEM_PROMPT, user, opts))
 
 
 def _correct_chunk_openrouter(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
-    user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs)
+    user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs, opts.uncertain)
     return _guard(chunk, _chat_openrouter(client, _SYSTEM_PROMPT, user, opts))
 
 

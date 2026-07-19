@@ -94,3 +94,11 @@ Không train model. "Học" = vòng dữ liệu: user sửa → diff trích cặ
 - Migration additive: rollback = `ALTER TABLE transcripts DROP COLUMN edited_text` (SQLite ≥3.35) + `DROP TABLE corrections`. Test rollback trong test_db.py ngay PR1, không dời đến deploy.
 - Mỗi PR revert độc lập: PR3-5 chỉ thêm nhánh code có guard, revert không hỏng PR trước.
 - Seed/remote lexicon xoá được bằng `DELETE FROM corrections WHERE source != 'user'` — không đụng dữ liệu user.
+
+## Mở rộng 2026-07-20 — US-806..808 (đợt Live Intelligence)
+
+Ba US nối tiếp trực tiếp thư viện này (chi tiết + US-809..814: `docs/plan-live-intelligence.md`):
+
+- **US-806 Topic-bias**: topic từ ContextTracker (US-805) giờ CÓ tác dụng lên bias — `build_bias(..., topic=)` xếp term khớp topic lên trước cap, `on_topic` callback refresh spec giữa phiên (hết "frozen" tuyệt đối; glossary user vẫn bất biến).
+- **US-807 Personal lexicon (học)**: `mine_speaker_terms` sau diarize/đặt tên → bảng `speaker_terms`.
+- **US-808 Personal lexicon (dùng)**: `build_bias(..., personal=)` sub-cap 240 ký tự, chọn người tham dự ở start card live.

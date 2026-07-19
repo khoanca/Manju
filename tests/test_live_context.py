@@ -117,6 +117,55 @@ def test_close_prevents_new_condense():
     assert calls == []
 
 
+# ── on_topic callback + initial_topic (US-806/809) ─────────────────────────
+
+
+def test_on_topic_called_with_new_topic_after_condense():
+    topics: list[str] = []
+    tracker = live.ContextTracker(summarize=lambda t, b: "chủ đề mới", on_topic=topics.append)
+    _fill(tracker, M)
+    tracker.close()
+    assert topics == ["chủ đề mới"]
+
+
+def test_on_topic_raising_does_not_kill_condense():
+    def boom(topic: str) -> None:
+        raise RuntimeError("refresh hỏng")
+
+    tracker = live.ContextTracker(summarize=lambda t, b: "chủ đề A", on_topic=boom)
+    _fill(tracker, M)
+    tracker.close()
+    assert "chủ đề A" in tracker.context()  # topic vẫn ghi dù callback nổ
+
+
+def test_on_topic_not_called_when_summarize_fails():
+    topics: list[str] = []
+
+    def fail(t: str, b: str) -> str:
+        raise RuntimeError("LLM down")
+
+    tracker = live.ContextTracker(summarize=fail, on_topic=topics.append)
+    _fill(tracker, M)
+    tracker.close()
+    assert topics == []
+
+
+def test_initial_topic_seeds_context_and_condense():
+    calls: list[tuple[str, str]] = []
+
+    def fake(topic: str, batch: str) -> str:
+        calls.append((topic, batch))
+        return "topic trôi"
+
+    tracker = live.ContextTracker(summarize=fake, initial_topic="họp sprint Manju")
+    assert tracker.topic() == "họp sprint Manju"
+    assert "Chủ đề đang bàn: họp sprint Manju" in tracker.context()  # trước mọi condense
+    _fill(tracker, M)
+    tracker.close()
+    assert calls[0][0] == "họp sprint Manju"  # condense nhận topic mồi làm topic cũ
+    assert tracker.topic() == "topic trôi"  # rồi vẫn tự trôi theo cuộc họp
+
+
 # ── Backend Ollama nhận context (US-805 AC1) ───────────────────────────────
 
 

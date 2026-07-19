@@ -95,6 +95,9 @@ class SettingsIn(BaseModel):
     lexicon_nam: bool | None = None
     lexicon_en: bool | None = None
     lexicon_url: str | None = None
+    # Toggle bổ trợ live: đánh dấu từ nghi sai + khử nhiễu đầu vào ("0"/"1")
+    flag_words: bool | None = None
+    denoise_enabled: bool | None = None
 
 
 # Field SettingsIn / key settings → vùng seed lexicon (app/data/lexicon/{region}.json)
@@ -129,6 +132,8 @@ def api_settings():
             "models_present": diarize.models_present(),
         },
         "lexicon": _lexicon_settings(),
+        "flag_words": db.get_setting("flag_words", "0") == "1",
+        "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
     }
 
 
@@ -155,11 +160,17 @@ def api_settings_put(body: SettingsIn):
             corrections.remove_seed(region)
     if body.lexicon_url is not None:
         db.set_setting("lexicon_url", body.lexicon_url.strip())
+    if body.flag_words is not None:
+        db.set_setting("flag_words", "1" if body.flag_words else "0")
+    if body.denoise_enabled is not None:
+        db.set_setting("denoise_enabled", "1" if body.denoise_enabled else "0")
     return {
         "audio_dir": str(db.get_audio_dir()),
         "diarize_enabled": transcribe.diarize_enabled(),
         "glossary": db.get_setting("glossary", "") or "",
         "lexicon": _lexicon_settings(),
+        "flag_words": db.get_setting("flag_words", "0") == "1",
+        "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
     }
 
 
@@ -247,6 +258,15 @@ def api_transcript_audio(transcript_id: str):
 
 
 # ── Lớp speaker: tách giọng lại + gán tên cụm + quản lý người ──────────────
+def _mine_terms_hook(transcript_id: str) -> None:
+    """Hook mine từ vựng cá nhân theo người nói — never-fail, lỗi mine không
+    được làm fail diarize/gán tên (mirror hook trích cặp US-802)."""
+    try:
+        corrections.mine_speaker_terms(transcript_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("Mine từ vựng theo người thất bại: %s", transcript_id, exc_info=True)
+
+
 @app.post("/api/transcripts/{transcript_id}/diarize")
 def api_diarize(transcript_id: str, num_speakers: int = -1):
     """Chạy/chạy lại pass 3 trên file ghi âm đã lưu (kể cả recording live).
@@ -270,6 +290,7 @@ def api_diarize(transcript_id: str, num_speakers: int = -1):
     vps = diarize.to_np_voiceprints(db.load_voiceprints())
     smap = diarize.identify_clusters(audio, labeled, smap, vps)  # US-703: tự nhận diện
     db.update_speaker_layer(transcript_id, labeled, smap)
+    _mine_terms_hook(transcript_id)
     return {
         "segments": labeled, "speaker_map": smap,
         "num_speakers": len(smap), "speakers": db.speaker_names(),
@@ -323,6 +344,7 @@ def api_assign_cluster(transcript_id: str, body: ClusterAssign):
         smap = db.set_transcript_cluster(transcript_id, body.cluster, sid)
     except KeyError as exc:
         raise HTTPException(404, "Không tìm thấy transcript") from exc
+    _mine_terms_hook(transcript_id)
     return {"speaker_map": smap, "speakers": db.speaker_names()}
 
 
@@ -333,13 +355,18 @@ def api_speakers():
 
 class SpeakerIn(BaseModel):
     name: str
+    region: str | None = None  # 'bac'|'trung'|'nam'|"" (rỗng = bỏ gán)|None (giữ nguyên)
 
 
 @app.patch("/api/speakers/{speaker_id}")
 def api_rename_speaker(speaker_id: str, body: SpeakerIn):
     if not body.name.strip():
         raise HTTPException(400, "Tên rỗng")
+    if body.region is not None and body.region not in ("", "bac", "trung", "nam"):
+        raise HTTPException(400, "region phải là 'bac', 'trung', 'nam' hoặc rỗng")
     db.rename_speaker(speaker_id, body.name)
+    if body.region is not None:
+        db.set_speaker_region(speaker_id, body.region or None)
     return {"ok": True}
 
 

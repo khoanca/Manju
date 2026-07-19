@@ -23,6 +23,10 @@ MIN_AUDIO_SEC = 3.0  # dưới ngưỡng: không đủ để tách giọng đán
 MIN_SPAN_SEC = 0.5   # đoạn ngắn hơn: bỏ khi tính voiceprint
 # Ngưỡng cosine để coi 2 giọng là cùng người (CAM++ zh_en). Cao = ít nhận nhầm.
 MATCH_THRESHOLD = float(os.environ.get("DIARIZE_MATCH_THRESHOLD", "0.5"))
+# Live speaker-ID (US-814): vector 1 utterance nhiễu hơn centroid offline —
+# cần audio dài hơn MIN_SPAN_SEC và ngưỡng tune riêng được qua env.
+LIVE_ID_MIN_S = 1.5
+LIVE_ID_THRESHOLD = float(os.environ.get("LIVE_ID_THRESHOLD", str(MATCH_THRESHOLD)))
 
 _lock = threading.Lock()
 _diarizer = None
@@ -177,6 +181,14 @@ def _embed_samples(samples: np.ndarray, spans: list[tuple[float, float]]) -> np.
     mean = np.mean(vecs, axis=0)
     norm = float(np.linalg.norm(mean))
     return (mean / norm).astype(np.float32) if norm else None
+
+
+def embed_utterance(samples: np.ndarray) -> np.ndarray | None:
+    """Voiceprint của 1 utterance live (PCM float32 16kHz, US-814).
+    None nếu thiếu model / audio quá ngắn."""
+    if not models_present() or samples.size < SAMPLE_RATE * LIVE_ID_MIN_S:
+        return None
+    return _embed_samples(samples, [(0.0, samples.size / SAMPLE_RATE)])
 
 
 def embed_spans(audio_path: Path | str, spans: list[tuple[float, float]]) -> np.ndarray | None:

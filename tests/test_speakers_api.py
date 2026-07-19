@@ -82,6 +82,82 @@ def test_assign_missing_transcript_404(client):
     assert r.status_code == 404
 
 
+def test_patch_speaker_region_valid_empty_and_untouched(client):
+    sid = db.find_or_create_speaker("Minh")
+    r = client.patch(f"/api/speakers/{sid}", json={"name": "Minh", "region": "nam"})
+    assert r.status_code == 200
+    assert client.get("/api/speakers").json()[0]["region"] == "nam"
+    # rỗng → NULL
+    r = client.patch(f"/api/speakers/{sid}", json={"name": "Minh", "region": ""})
+    assert r.status_code == 200
+    assert client.get("/api/speakers").json()[0]["region"] is None
+    # không gửi region → giữ nguyên giá trị đang có
+    db.set_speaker_region(sid, "bac")
+    assert client.patch(f"/api/speakers/{sid}", json={"name": "Minh mới"}).status_code == 200
+    row = client.get("/api/speakers").json()[0]
+    assert (row["name"], row["region"]) == ("Minh mới", "bac")
+
+
+def test_patch_speaker_region_invalid_400(client):
+    sid = db.find_or_create_speaker("Minh")
+    r = client.patch(f"/api/speakers/{sid}", json={"name": "Minh", "region": "tay-bac"})
+    assert r.status_code == 400
+    assert client.get("/api/speakers").json()[0]["region"] is None
+
+
+# ── Hook mine từ vựng cá nhân sau diarize/gán tên cụm ──────────────────────
+def test_assign_cluster_mines_speaker_terms(client):
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="t-mine", title="Họp", language="vi", model="m", duration=3.0,
+        created_at="2026-01-01T00:00:00+07:00", text="x", raw_text=None,
+        segments=[{"start": 0.0, "end": 3.0,
+                   "text": "deploy Kubernetes rồi lại Kubernetes", "spk": 0}],
+        llm_model=None, audio_file=None, audio_dir=None, speaker_map={"0": None},
+    ))
+    r = client.put("/api/transcripts/t-mine/speaker-map", json={"cluster": 0, "name": "Minh"})
+    assert r.status_code == 200
+    sid = r.json()["speaker_map"]["0"]
+    assert "Kubernetes" in db.personal_terms([sid])
+
+
+def test_assign_cluster_200_when_mining_raises(client, monkeypatch):
+    from app import corrections
+
+    def boom(tid):
+        raise RuntimeError("mine nổ giả lập")
+
+    monkeypatch.setattr(corrections, "mine_speaker_terms", boom)
+    _seed_transcript()
+    r = client.put("/api/transcripts/20260101-000000-hop/speaker-map",
+                   json={"cluster": 0, "name": "Minh"})
+    assert r.status_code == 200
+    assert r.json()["speaker_map"]["0"] is not None
+
+
+def test_diarize_200_when_mining_raises(client, monkeypatch, tmp_path):
+    from app import corrections
+
+    def boom(tid):
+        raise RuntimeError("mine nổ giả lập")
+
+    monkeypatch.setattr(corrections, "mine_speaker_terms", boom)
+    monkeypatch.setattr(diarize, "models_present", lambda: True)
+    monkeypatch.setattr(diarize, "diarize_file", lambda audio, n: [(0.0, 3.0, 0)])
+    monkeypatch.setattr(diarize, "assign_speakers", lambda segs, spans: segs)
+    monkeypatch.setattr(diarize, "initial_speaker_map", lambda segs: {"0": None})
+    monkeypatch.setattr(diarize, "to_np_voiceprints", lambda vps: [])
+    monkeypatch.setattr(diarize, "identify_clusters", lambda audio, segs, smap, vps: smap)
+    (tmp_path / "rec" / "a.wav").write_bytes(b"\x00")
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="t-d", title="Họp", language="vi", model="m", duration=3.0,
+        created_at="2026-01-01T00:00:00+07:00", text="a", raw_text=None,
+        segments=[{"start": 0.0, "end": 3.0, "text": "a", "spk": 0}],
+        llm_model=None, audio_file="a.wav", audio_dir=str(tmp_path / "rec"),
+    ))
+    r = client.post("/api/transcripts/t-d/diarize")
+    assert r.status_code == 200
+
+
 def test_diarize_guard_no_models(client, monkeypatch):
     _seed_transcript()
     monkeypatch.setattr(diarize, "models_present", lambda: False)
@@ -130,3 +206,18 @@ def test_settings_put_without_glossary_keeps_it(client, monkeypatch):
     s = client.get("/api/settings").json()
     assert s["glossary"] == ""  # cho phép xóa glossary bằng chuỗi rỗng
     assert s["diarize"]["enabled"] is True
+
+
+def test_settings_flag_words_and_denoise_roundtrip(client, monkeypatch):
+    _stub_engine(monkeypatch)
+    s = client.get("/api/settings").json()
+    assert (s["flag_words"], s["denoise_enabled"]) == (False, False)  # default tắt
+    r = client.put("/api/settings", json={"flag_words": True, "denoise_enabled": True})
+    assert r.status_code == 200
+    assert (r.json()["flag_words"], r.json()["denoise_enabled"]) == (True, True)
+    assert db.get_setting("flag_words") == "1"
+    assert db.get_setting("denoise_enabled") == "1"
+    # PUT 1 key không đụng key kia
+    client.put("/api/settings", json={"flag_words": False})
+    s = client.get("/api/settings").json()
+    assert (s["flag_words"], s["denoise_enabled"]) == (False, True)

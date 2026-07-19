@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
 CREATE TABLE IF NOT EXISTS speakers (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  region     TEXT  -- vùng miền giọng: 'bac'|'trung'|'nam'|NULL (chưa rõ)
 );
 
 CREATE TABLE IF NOT EXISTS voiceprints (
@@ -68,6 +69,17 @@ CREATE TABLE IF NOT EXISTS voiceprints (
   created_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_vp_speaker ON voiceprints(speaker_id);
+
+-- Từ vựng cá nhân mine từ transcript đã gán tên người nói — bias ASR phiên sau.
+CREATE TABLE IF NOT EXISTS speaker_terms (
+  transcript_id TEXT NOT NULL,
+  speaker_id    TEXT NOT NULL REFERENCES speakers(id),
+  term          TEXT NOT NULL,
+  count         INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (transcript_id, speaker_id, term)
+);
+CREATE INDEX IF NOT EXISTS idx_st_speaker ON speaker_terms(speaker_id);
 
 -- Thư viện sửa lỗi (US-802): cặp (sai → đúng) trích từ chỉnh sửa của user,
 -- seed lexicon vùng miền, hoặc nguồn remote. Chỉ entry 'approved' được mồi.
@@ -109,6 +121,9 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE transcripts ADD COLUMN speaker_map TEXT")
     if "edited_text" not in cols:
         conn.execute("ALTER TABLE transcripts ADD COLUMN edited_text TEXT")
+    spk_cols = {r["name"] for r in conn.execute("PRAGMA table_info(speakers)")}
+    if "region" not in spk_cols:
+        conn.execute("ALTER TABLE speakers ADD COLUMN region TEXT")
 
 
 # ── Transcripts ────────────────────────────────────────────────────────────
@@ -259,7 +274,7 @@ def list_speakers() -> list[dict]:
     """Người có tên + số voiceprint đã enroll (cho trang Quản lý giọng)."""
     with _connect() as conn:
         rows = conn.execute(
-            """SELECT s.id, s.name, s.created_at, COUNT(v.id) AS voiceprints
+            """SELECT s.id, s.name, s.created_at, s.region, COUNT(v.id) AS voiceprints
                FROM speakers s LEFT JOIN voiceprints v ON v.speaker_id = s.id
                GROUP BY s.id ORDER BY s.name COLLATE NOCASE"""
         ).fetchall()
@@ -288,10 +303,18 @@ def rename_speaker(speaker_id: str, name: str) -> None:
         conn.execute("UPDATE speakers SET name = ? WHERE id = ?", (name.strip(), speaker_id))
 
 
+def set_speaker_region(speaker_id: str, region: str | None) -> None:
+    """Gán vùng miền giọng của 1 người ('bac'|'trung'|'nam') — None = bỏ gán."""
+    with _connect() as conn:
+        conn.execute("UPDATE speakers SET region = ? WHERE id = ?", (region, speaker_id))
+
+
 def delete_speaker(speaker_id: str) -> None:
-    """Xóa người + voiceprint; gỡ tham chiếu khỏi mọi speaker_map (không xóa câu)."""
+    """Xóa người + voiceprint + từ vựng cá nhân; gỡ tham chiếu khỏi mọi
+    speaker_map (không xóa câu)."""
     with _connect() as conn:
         conn.execute("DELETE FROM voiceprints WHERE speaker_id = ?", (speaker_id,))
+        conn.execute("DELETE FROM speaker_terms WHERE speaker_id = ?", (speaker_id,))
         conn.execute("DELETE FROM speakers WHERE id = ?", (speaker_id,))
         rows = conn.execute(
             "SELECT id, speaker_map FROM transcripts WHERE speaker_map LIKE ?",
@@ -356,6 +379,38 @@ def set_transcript_cluster(transcript_id: str, cluster: int, speaker_id: str | N
             (json.dumps(smap, ensure_ascii=False), transcript_id),
         )
     return smap
+
+
+# ── Speaker terms (từ vựng cá nhân theo người nói — bias ASR) ──────────────
+def replace_speaker_terms(transcript_id: str, rows: list[tuple[str, str, int]]) -> int:
+    """Ghi lại toàn bộ term mine được của 1 transcript — rows là
+    (speaker_id, term, count). Một transaction: xoá hàng cũ rồi insert hàng
+    loạt (chạy lại không nhân đôi). Trả số hàng đã insert."""
+    now = datetime.now(UTC).astimezone().isoformat()
+    with _connect() as conn:
+        conn.execute("DELETE FROM speaker_terms WHERE transcript_id = ?", (transcript_id,))
+        conn.executemany(
+            """INSERT INTO speaker_terms (transcript_id, speaker_id, term, count, created_at)
+               VALUES (?,?,?,?,?)""",
+            [(transcript_id, sid, term, count, now) for sid, term, count in rows],
+        )
+    return len(rows)
+
+
+def personal_terms(speaker_ids: list[str], limit: int = 40) -> list[str]:
+    """Term của các người nói đã biết, gộp count qua mọi transcript, hay gặp
+    nhất trước (tie-break theo term). [] nếu không truyền speaker nào."""
+    if not speaker_ids:
+        return []
+    placeholders = ",".join("?" * len(speaker_ids))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT term, SUM(count) AS c FROM speaker_terms
+                WHERE speaker_id IN ({placeholders})
+                GROUP BY term ORDER BY c DESC, term LIMIT ?""",
+            [*speaker_ids, limit],
+        ).fetchall()
+    return [r["term"] for r in rows]
 
 
 # ── Corrections (thư viện sửa lỗi — US-802) ────────────────────────────────

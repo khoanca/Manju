@@ -15,10 +15,13 @@ from app import corrections, db, transcribe
 from app.corrections import (
     BIAS_CAP_CHARS,
     LEXICON_DIR,
+    PERSONAL_CAP_CHARS,
     SEED_REGIONS,
+    _salient_terms,
     build_bias,
     extract_pairs,
     import_seed,
+    mine_speaker_terms,
     remove_seed,
     top_pairs,
 )
@@ -346,6 +349,134 @@ def test_top_pairs_db_error_returns_empty(tmp_db, monkeypatch):
     assert top_pairs() == []
 
 
+# ── build_bias mở rộng: personal + topic + regions ─────────────────────────
+def _seed_tagged(wrong: str, right: str, tag: str, count: int = 1) -> None:
+    row = db.upsert_correction(wrong, right, tag=tag)
+    db.set_correction_status(row["id"], "approved")
+    for _ in range(count - 1):
+        db.upsert_correction(wrong, right)
+
+
+def test_build_bias_empty_extras_identical_to_legacy(tmp_db):
+    """Không personal/topic/regions → output byte-for-byte như hành vi cũ."""
+    _seed_approved("gít háp", "GitHub", count=1)
+    _seed_approved("cu bơ nét", "Kubernetes", count=3)
+    legacy = build_bias("MyTerm")
+    assert legacy == "MyTerm, Kubernetes, GitHub"
+    assert build_bias("MyTerm", personal=(), topic="", regions=()) == legacy
+
+
+def test_build_bias_region_beats_topic_beats_count(tmp_db):
+    _seed_tagged("a sai", "CountTop", "", count=5)
+    _seed_tagged("b sai", "TopicHit", "", count=2)
+    _seed_tagged("c sai", "NamTerm", "nam", count=1)
+    out = build_bias("", topic="bàn về topichit hôm nay", regions=("nam",))
+    assert out == "NamTerm, TopicHit, CountTop"
+
+
+def test_build_bias_topic_moves_matching_terms_up(tmp_db):
+    _seed_approved("a sai", "Docker", count=5)
+    _seed_approved("b sai", "GitHub", count=1)
+    assert build_bias("", topic="review GitHub PR") == "GitHub, Docker"
+
+
+def test_build_bias_personal_between_user_and_library_dedup(tmp_db):
+    _seed_approved("a sai", "Docker", count=2)
+    out = build_bias("MyTerm", personal=["Kafka", "myterm", "Redis"])
+    # personal sau user, dedup casefold ("myterm" trùng glossary), library cuối
+    assert out == "MyTerm, Kafka, Redis, Docker"
+
+
+def test_build_bias_personal_sub_cap_240(tmp_db):
+    personal = [f"p{i:02d}-" + "x" * 55 for i in range(6)]  # mỗi term 59 ký tự
+    out = build_bias("", personal=personal)
+    # 3 term đầu = 59+61+61 = 181 ≤ 240; term 4 đẩy lên 242 > cap → dừng
+    assert out == ", ".join(personal[:3])
+    assert "p03" not in out
+    assert PERSONAL_CAP_CHARS == 240
+
+
+def test_build_bias_db_error_keeps_user_and_personal(tmp_db, monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("db nổ giả lập")
+
+    monkeypatch.setattr(db, "list_corrections", boom)
+    assert build_bias("MyTerm", personal=["Kafka"]) == "MyTerm, Kafka"
+
+
+def test_top_pairs_regions_rank_first_before_cut(tmp_db):
+    _seed_approved("a sai", "A", count=3)
+    _seed_tagged("b sai", "B", "nam", count=1)
+    _seed_tagged("c sai", "C", "bac", count=2)
+    # nam lên đầu (stable), phần còn lại giữ count DESC; cắt limit SAU khi sort
+    assert top_pairs(regions=("nam",)) == [("b sai", "B"), ("a sai", "A"), ("c sai", "C")]
+    assert top_pairs(limit=1, regions=("nam",)) == [("b sai", "B")]
+
+
+# ── _salient_terms + mine_speaker_terms (từ vựng cá nhân) ──────────────────
+def test_salient_terms_keeps_terms_drops_noise():
+    text = "Triển khai Kubernetes với redis và CI ngay 123 ok không nhé Kubernetes"
+    c = _salient_terms(text, known=set())
+    assert c["Kubernetes"] == 2
+    assert c["redis"] == 1
+    assert c["CI"] == 1
+    for dropped in ("không", "với", "và", "nhé", "123", "ok"):
+        assert dropped not in c
+
+
+def test_salient_terms_known_kept_at_count_one():
+    c = _salient_terms("dùng k8s đi nhé", known={"k8s"})
+    assert c["k8s"] == 1
+    assert "nhé" not in c
+
+
+def test_salient_terms_counts_casefold_keeps_first_casing():
+    c = _salient_terms("Redis rồi redis nữa REDIS", known=set())
+    assert c == {"Redis": 3}
+
+
+def _seed_spk_transcript(tid: str, speaker_map: dict) -> None:
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id=tid, title="Họp", language="vi", model="m", duration=9.0,
+        created_at="2026-01-01T00:00:00+07:00", text="x", raw_text=None,
+        segments=[
+            {"start": 0.0, "end": 3.0, "text": "triển khai Kubernetes với Kubernetes", "spk": 0},
+            {"start": 3.0, "end": 6.0, "text": "dùng redis cache và redis queue", "spk": 1},
+            {"start": 6.0, "end": 9.0, "text": "GitHub GitHub GitHub", "spk": 2},
+        ],
+        llm_model=None, audio_file=None, audio_dir=None, speaker_map=speaker_map,
+    ))
+
+
+def test_mine_speaker_terms_groups_by_speaker_skips_unmapped(tmp_db):
+    a = db.find_or_create_speaker("An")
+    b = db.find_or_create_speaker("Bình")
+    _seed_spk_transcript("t-mine", {"0": a, "1": b, "2": None})
+    # count≥2 mới giữ: Kubernetes(2)/redis(2) vào, cache/queue(1) rớt;
+    # cụm 2 (GitHub×3) chưa gán tên → bỏ qua
+    assert mine_speaker_terms("t-mine") == 2
+    assert db.personal_terms([a]) == ["Kubernetes"]
+    assert db.personal_terms([b]) == ["redis"]
+
+
+def test_mine_speaker_terms_known_kept_at_count_one(tmp_db):
+    a = db.find_or_create_speaker("An")
+    _seed_approved("két", "cache")
+    _seed_spk_transcript("t-mine", {"0": None, "1": a, "2": None})
+    assert mine_speaker_terms("t-mine") == 2  # redis(2) + cache(1, trong known)
+    assert set(db.personal_terms([a])) == {"redis", "cache"}
+
+
+def test_mine_speaker_terms_missing_or_no_segments_returns_zero(tmp_db):
+    assert mine_speaker_terms("khong-ton-tai") == 0
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="t-empty", title="Họp", language="vi", model="m", duration=1.0,
+        created_at="2026-01-01T00:00:00+07:00", text="x", raw_text=None,
+        segments=None, llm_model=None, audio_file=None, audio_dir=None,
+    ))
+    assert mine_speaker_terms("t-empty") == 0
+
+
 # ── Wiring upload + live (T-010, T-011) ────────────────────────────────────
 def test_process_wires_build_bias_into_asr_and_pass2(tmp_db, monkeypatch, tmp_path):
     _seed_approved("cu bơ nét", "Kubernetes", count=2)
@@ -390,8 +521,11 @@ def test_live_session_snapshots_bias_at_start(tmp_db, monkeypatch):
     session = live.LiveSession(
         ws=None, loop=None, cfg={"glossary": "MyTerm", "store_audio": False}
     )
-    # Library chốt lúc start phiên: vào cả spec ASR lẫn pairs pass 2
-    assert session.spec.glossary == "MyTerm, Kubernetes"
+    # Library chốt lúc start phiên: vào cả spec ASR lẫn pairs pass 2.
+    # Prompt ASR xếp user CUỐI (US-806: Whisper cắt đầu, giữ đuôi khi tràn);
+    # bản cho pass 2 (session.glossary) vẫn user-first như cũ.
+    assert session.spec.glossary == "Kubernetes, MyTerm"
+    assert session.glossary == "MyTerm, Kubernetes"
     assert session.pairs == (("cu bơ nét", "Kubernetes"),)
 
 
