@@ -48,9 +48,11 @@ class LlmOpts:
     live mode dùng num_ctx nhỏ + timeout ngắn để kịp subtitle."""
 
     glossary: str = ""
-    context: str = ""  # vài câu trước đó — chỉ backend OpenRouter dùng
+    context: str = ""  # ngữ cảnh đang diễn ra (topic + câu gần nhất) — cả 2 backend dùng (US-805)
     num_ctx: int = 8192  # chỉ backend Ollama dùng
     timeout: float = TIMEOUT_S
+    pairs: tuple[tuple[str, str], ...] = ()  # few-shot (sai → đúng) từ thư viện (US-803)
+    uncertain: tuple[str, ...] = ()  # cụm word-confidence thấp từ ASR (US-812)
 
 _SYSTEM_PROMPT = (
     "Bạn là công cụ soát lỗi transcript cuộc họp tiếng Việt có pha thuật ngữ "
@@ -65,8 +67,18 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _prompt_for(chunk: str, glossary: str, context: str = "") -> str:
+def _prompt_for(
+    chunk: str,
+    glossary: str,
+    context: str = "",
+    pairs: tuple[tuple[str, str], ...] = (),
+    uncertain: tuple[str, ...] = (),
+) -> str:
     parts = []
+    if pairs:
+        # Few-shot từ thư viện đã duyệt: LLM sửa nhất quán các lỗi hay gặp.
+        listing = "\n".join(f"- {w} → {r}" for w, r in pairs)
+        parts.append("Các cặp đã biết (sai → đúng):\n" + listing)
     if glossary:
         parts.append(f"Danh sách thuật ngữ / tên riêng cần nhận đúng: {glossary}")
     if context:
@@ -74,6 +86,9 @@ def _prompt_for(chunk: str, glossary: str, context: str = "") -> str:
             "Các câu ngay trước đó trong cuộc họp (chỉ để hiểu ngữ cảnh, "
             "KHÔNG đưa vào kết quả):\n" + context
         )
+    if uncertain:
+        # US-812: ASR tự báo chỗ nghe không chắc — LLM soát mạnh tay đúng chỗ.
+        parts.append("Các cụm nghe không rõ, ưu tiên soát kỹ: " + ", ".join(uncertain))
     parts.append("Text cần soát:\n" + chunk)
     return "\n\n".join(parts)
 
@@ -104,7 +119,8 @@ def _clean_output(raw: str) -> str:
     return text
 
 
-def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
+def _chat_ollama(client: httpx.Client, system: str, user: str, opts: LlmOpts) -> str:
+    """1 lượt chat Ollama, trả text đã clean. Dùng chung cho sửa câu + tóm tắt topic."""
     resp = client.post(
         f"{OLLAMA_URL}/api/chat",
         json={
@@ -115,32 +131,46 @@ def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
             # (context quá lớn làm KV cache phình, model tràn RAM → cực chậm).
             "options": {"temperature": 0.1, "num_ctx": opts.num_ctx},
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _prompt_for(chunk, opts.glossary)},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
             ],
         },
         timeout=opts.timeout,
     )
     resp.raise_for_status()
-    return _guard(chunk, _clean_output(resp.json()["message"]["content"]))
+    return _clean_output(resp.json()["message"]["content"])
 
 
-def _correct_chunk_openrouter(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
-    # Không set temperature: các model Claude đời mới từ chối sampling params.
+def _chat_openrouter(client: httpx.Client, system: str, user: str, opts: LlmOpts) -> str:
+    """1 lượt chat OpenRouter, trả text đã clean.
+
+    Không set temperature: các model Claude đời mới từ chối sampling params.
+    """
     resp = client.post(
         f"{OPENROUTER_URL}/chat/completions",
         headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
         json={
             "model": OPENROUTER_MODEL,
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _prompt_for(chunk, opts.glossary, opts.context)},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
             ],
         },
         timeout=opts.timeout,
     )
     resp.raise_for_status()
-    return _guard(chunk, _clean_output(resp.json()["choices"][0]["message"]["content"]))
+    return _clean_output(resp.json()["choices"][0]["message"]["content"])
+
+
+def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
+    # US-805: Ollama cũng nhận context như OpenRouter — cùng 1 chỗ build prompt.
+    user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs, opts.uncertain)
+    return _guard(chunk, _chat_ollama(client, _SYSTEM_PROMPT, user, opts))
+
+
+def _correct_chunk_openrouter(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
+    user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs, opts.uncertain)
+    return _guard(chunk, _chat_openrouter(client, _SYSTEM_PROMPT, user, opts))
 
 
 def _guard(chunk: str, fixed: str) -> str:
@@ -155,10 +185,10 @@ def _guard(chunk: str, fixed: str) -> str:
 def correct_sentence(text: str, opts: LlmOpts) -> tuple[str, bool]:
     """Sửa 1 câu (live mode) — caller đặt num_ctx nhỏ + timeout ngắn cho kịp subtitle.
 
-    `opts.context` = vài câu trước đó — Claude dựa vào mạch cuộc họp để đoán
-    đúng thuật ngữ (Ollama local bỏ qua để đỡ tốn ctx). Trả (câu đã sửa, True)
-    nếu chạy trót lọt, ngược lại (câu gốc, False). Cùng contract never-fail như
-    correct_text.
+    `opts.context` = ngữ cảnh đang diễn ra (topic + các câu gần nhất) — LLM dựa
+    vào mạch cuộc họp để đoán đúng thuật ngữ; cả 2 backend đều dùng (US-805).
+    Trả (câu đã sửa, True) nếu chạy trót lọt, ngược lại (câu gốc, False). Cùng
+    contract never-fail như correct_text.
     """
     text = text.strip()
     if not text:
@@ -175,10 +205,41 @@ def correct_sentence(text: str, opts: LlmOpts) -> tuple[str, bool]:
         return text, False
 
 
+_TOPIC_SYSTEM_PROMPT = (
+    "Bạn theo dõi một cuộc họp tiếng Việt có pha thuật ngữ tiếng Anh. "
+    "Tóm tắt 1-2 câu chủ đề đang được bàn (tên dự án, thuật ngữ, chủ đề chính). "
+    "Trả về đúng phần tóm tắt, không lời giải thích, không markdown."
+)
+
+
+def summarize_topic(old_topic: str, sentences: str, opts: LlmOpts) -> str | None:
+    """Tóm tắt chủ đề đang bàn (live, US-805) — cùng backend selection với pass 2.
+
+    Trả topic mới, hoặc None khi LLM lỗi/timeout/trả rỗng — caller giữ topic cũ
+    (never-fail, không bao giờ raise).
+    """
+    parts = []
+    if old_topic:
+        parts.append("Chủ đề trước đó: " + old_topic)
+    parts.append("Các câu mới trong cuộc họp:\n" + sentences)
+    user = "\n\n".join(parts)
+    try:
+        with httpx.Client() as client:
+            if openrouter_enabled():
+                try:
+                    return _chat_openrouter(client, _TOPIC_SYSTEM_PROMPT, user, opts) or None
+                except Exception:  # noqa: BLE001 — mạng rớt/hết credit → thử LLM local
+                    pass
+            return _chat_ollama(client, _TOPIC_SYSTEM_PROMPT, user, opts) or None
+    except Exception:  # noqa: BLE001 — Ollama tắt/timeout → giữ topic cũ
+        return None
+
+
 def correct_text(
     text: str,
     glossary: str = "",
     on_progress: Callable[[float], None] | None = None,
+    pairs: tuple[tuple[str, str], ...] = (),
 ) -> tuple[str, bool]:
     """Trả (text đã sửa, True) nếu pass 2 chạy trót lọt, ngược lại (text gốc, False)."""
     text = text.strip()
@@ -186,7 +247,7 @@ def correct_text(
         return text, False
     chunks = _split_chunks(text)
     fixed_parts: list[str] = []
-    opts = LlmOpts(glossary=glossary)
+    opts = LlmOpts(glossary=glossary, pairs=pairs)
     try:
         with httpx.Client() as client:
             for i, chunk in enumerate(chunks):

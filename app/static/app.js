@@ -1,4 +1,4 @@
-// Client Wavelogs — tách từ index.html. Gồm: router màn hình, lịch sử,
+// Client Manju — tách từ index.html. Gồm: router màn hình, lịch sử,
 // upload, live (mic → WS, có buffer + tự nối lại), settings (localStorage +
 // server), wake lock, PWA, OPFS cho client mỏng (PRD FR-4).
 const $ = (id) => document.getElementById(id);
@@ -35,6 +35,19 @@ function saveSettings(){
   }));
 }
 ["lang", "model", "prompt"].forEach(id => $(id).addEventListener("change", saveSettings));
+// Glossary: server là nguồn chân lý, localStorage chỉ là cache. User sửa xong
+// (change) → PUT lên server; lỗi mạng thì giữ cache, glossary vẫn gửi kèm
+// từng request nên không cần báo lỗi ồn ào.
+$("prompt").addEventListener("change", () => putGlossary($("prompt").value));
+async function putGlossary(text){
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ glossary: text }),
+    });
+    if (!r.ok) throw new Error(r.statusText);
+  } catch (e) { console.warn("Chưa sync glossary lên server:", e.message); }
+}
 $("swLocalAudio").onclick = () => {
   if (!HAS_OPFS) return;
   storeAudioLocal = $("swLocalAudio").classList.toggle("on");
@@ -42,13 +55,63 @@ $("swLocalAudio").onclick = () => {
 };
 
 // ── Settings phía server (engine, thư mục audio) ───────────────────────────
+let diarizeReady = false;  // model đã tải chưa → cho phép bật pass 3
 async function loadServerSettings(){
   try {
     const s = await (await fetch("/api/settings")).json();
     $("engineVal").textContent = s.engine.model;
     $("audioDir").value = s.audio_dir;
+    // Glossary: server có → dùng làm chân lý (trừ khi user đang gõ dở);
+    // server rỗng mà local có → đẩy lên MỘT lần (migration từ bản chỉ-localStorage).
+    const remoteGlossary = s.glossary || "";
+    if (remoteGlossary){
+      if (document.activeElement !== $("prompt") && $("prompt").value !== remoteGlossary){
+        $("prompt").value = remoteGlossary;
+        saveSettings();
+      }
+    } else if ($("prompt").value.trim()){
+      console.info("Glossary: server chưa có — đồng bộ bản local lên server.");
+      putGlossary($("prompt").value);
+    }
+    const d = s.diarize || {};
+    diarizeReady = !!d.models_present;
+    $("swDiarize").classList.toggle("on", !!d.enabled);
+    $("diarizeHint").textContent = diarizeReady
+      ? 'Pass 3 — tách "ai nói câu nào" trong bản ghi mới'
+      : "Chưa tải model — chạy: uv run python scripts/fetch_diarize_models.py";
+    // Toggle "0"/"1" phía server: đánh dấu từ nghe không rõ + khử ồn mic
+    for (const [id, key] of Object.entries(SRV_SW)) $(id).classList.toggle("on", s[key] === "1");
+    // US-804: trạng thái toggle seed lexicon + URL nguồn cập nhật
+    const lex = s.lexicon || {};
+    for (const [id, key] of Object.entries(LEX_IDS)) $(id).checked = !!lex[key];
+    if (document.activeElement !== $("lexUrl")) $("lexUrl").value = lex.url || "";
+    syncLexBtn();
   } catch { $("engineVal").textContent = "—"; }
 }
+$("swDiarize").onclick = async () => {
+  if (!diarizeReady && !$("swDiarize").classList.contains("on")){
+    alert("Chưa tải model. Chạy: uv run python scripts/fetch_diarize_models.py rồi tải lại trang.");
+    return;
+  }
+  const on = $("swDiarize").classList.toggle("on");
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ diarize_enabled: on }),
+    });
+  } catch { $("swDiarize").classList.toggle("on"); }
+};
+// Toggle server-backed dạng chuỗi "0"/"1" (flag từ nghe không rõ, khử ồn mic).
+const SRV_SW = { swFlagWords: "flag_words", swDenoise: "denoise_enabled" };
+Object.keys(SRV_SW).forEach(id => $(id).onclick = async () => {
+  const on = $(id).classList.toggle("on");
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [SRV_SW[id]]: on ? "1" : "0" }),
+    });
+  } catch { $(id).classList.toggle("on"); }
+});
 $("saveAudioDir").onclick = async () => {
   const msg = $("audioDirMsg");
   try {
@@ -72,6 +135,7 @@ function showScreen(name){
   $("tabbar").classList.toggle("hidden", !tabbed);
   // Đồng bộ trạng thái active cho cả tab bar (mobile) lẫn sidebar (laptop).
   document.querySelectorAll("[data-tab]").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  if (name === "settings"){ loadServerSettings(); loadSpeakerList(); }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("[data-tab]").forEach(t => t.onclick = () => {
@@ -84,6 +148,25 @@ $("addBtn").onclick = () => showScreen("upload");
 $("sideUpload").onclick = () => { if (!live) showScreen("upload"); };
 $("searchBtn").onclick = () => { const b = $("searchBox"); b.classList.toggle("hidden"); if (!b.classList.contains("hidden")) $("searchInput").focus(); else { $("searchInput").value=""; renderHistory(); } };
 $("searchInput").oninput = renderHistory;
+
+// ── Lọc & sắp xếp bản ghi ──────────────────────────────────────────────────
+const FILTER_IDS = ["sortBy", "fDateFrom", "fDateTo", "fTimeFrom", "fTimeTo", "fDurMin", "fDurMax"];
+$("filterBtn").onclick = () => {
+  const p = $("filters");
+  const open = p.classList.toggle("hidden") === false;
+  $("filterBtn").classList.toggle("on", open || filtersActive());
+};
+FILTER_IDS.forEach(id => $(id).addEventListener("input", renderHistory));
+$("fClear").onclick = () => {
+  ["fDateFrom", "fDateTo", "fTimeFrom", "fTimeTo", "fDurMin", "fDurMax"].forEach(id => $(id).value = "");
+  $("sortBy").value = "date-desc";
+  renderHistory();
+};
+// Có bất kỳ điều kiện lọc nào đang bật (không tính sắp xếp) → highlight nút.
+function filtersActive(){
+  return ["fDateFrom", "fDateTo", "fTimeFrom", "fTimeTo", "fDurMin", "fDurMax"]
+    .some(id => $(id).value) || !!($("searchInput").value || "").trim();
+}
 
 // ── Settings toggle (checkbox mirror) ──────────────────────────────────────
 $("swCorrect").onclick = () => {
@@ -103,13 +186,51 @@ const nfmt = (n) => (n||0).toLocaleString("en-US");
 // ── History ────────────────────────────────────────────────────────────────
 let ALL = [];
 async function loadHistory(){ ALL = await (await fetch("/api/transcripts")).json(); renderHistory(); }
+
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const SORTERS = {
+  "date-desc": (a, b) => cmpStr(b.created_at, a.created_at),   // created_at là ISO → so chuỗi = so thời gian
+  "date-asc":  (a, b) => cmpStr(a.created_at, b.created_at),
+  "title-asc": (a, b) => (a.title || "").localeCompare(b.title || "", "vi"),
+  "title-desc":(a, b) => (b.title || "").localeCompare(a.title || "", "vi"),
+  "dur-desc":  (a, b) => (b.duration || 0) - (a.duration || 0),
+  "dur-asc":   (a, b) => (a.duration || 0) - (b.duration || 0),
+};
+const localYMD = (d) => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const localHM  = (d) => pad(d.getHours()) + ":" + pad(d.getMinutes());
+
+// Lọc theo tên + khoảng ngày + khoảng giờ trong ngày + khoảng thời lượng, rồi sắp xếp.
+function filterSortHistory(){
+  const q = ($("searchInput").value || "").trim().toLowerCase();
+  const dFrom = $("fDateFrom").value, dTo = $("fDateTo").value;   // "YYYY-MM-DD" | ""
+  const tFrom = $("fTimeFrom").value, tTo = $("fTimeTo").value;   // "HH:MM" | ""
+  const durMin = parseFloat($("fDurMin").value), durMax = parseFloat($("fDurMax").value);
+  const out = ALL.filter(m => {
+    if (q && !(m.title || "").toLowerCase().includes(q)) return false;
+    const dt = new Date(m.created_at);
+    if (!isNaN(dt)){
+      const ymd = localYMD(dt), hm = localHM(dt);
+      if (dFrom && ymd < dFrom) return false;
+      if (dTo   && ymd > dTo)   return false;
+      if (tFrom && hm  < tFrom) return false;
+      if (tTo   && hm  > tTo)   return false;
+    }
+    const mins = (m.duration || 0) / 60;
+    if (!isNaN(durMin) && mins < durMin) return false;
+    if (!isNaN(durMax) && mins > durMax) return false;
+    return true;
+  });
+  return out.sort(SORTERS[$("sortBy").value] || SORTERS["date-desc"]);
+}
+
 function renderHistory(){
   const box = $("history");
-  const q = ($("searchInput").value || "").trim().toLowerCase();
-  const items = q ? ALL.filter(m => (m.title||"").toLowerCase().includes(q)) : ALL;
+  const items = filterSortHistory();
+  const active = filtersActive();
+  $("filterBtn").classList.toggle("on", active || !$("filters").classList.contains("hidden"));
   box.innerHTML = "";
   if (!items.length){
-    box.innerHTML = `<div class="empty"><span class="big">🎙️</span><b>${q ? "Không tìm thấy" : "Chưa có bản ghi nào"}</b>${q ? "" : "Bấm nút micro để ghi, hoặc ＋ để tải file lên."}</div>`;
+    box.innerHTML = `<div class="empty"><span class="big">🎙️</span><b>${active ? "Không tìm thấy" : "Chưa có bản ghi nào"}</b>${active ? "" : "Bấm nút micro để ghi, hoặc ＋ để tải file lên."}</div>`;
     return;
   }
   const opfs = opfsMap();
@@ -180,7 +301,9 @@ function startOpfsWriter(){
 }
 
 // ── Detail / result ────────────────────────────────────────────────────────
-let fixedText = "", rawText = null, showingRaw = false, downloadName = "transcript.txt";
+let fixedText = "", rawText = null, editedText = null, downloadName = "transcript.txt";
+let curView = "pass2";      // bản đang xem: "edited" | "pass2" | "raw"
+let baseTextAtOpen = "";    // bản hiệu lực lúc mở editor — gửi làm base_text khi PATCH (US-801)
 let lastBlobUrl = null;
 async function showAudio(id, hasServerAudio){
   const wrap = $("audioWrap"), player = $("player"), dl = $("dlAudio");
@@ -203,11 +326,31 @@ async function showAudio(id, hasServerAudio){
     } catch {} // file đã bị trình duyệt dọn (iOS xoá storage sau ~7 ngày không dùng)
   }
 }
-function setResult(text, raw, segments, id, hasServerAudio){
-  fixedText = text; rawText = raw || null; showingRaw = false;
-  $("result").value = text;
-  $("toggleRaw").style.display = rawText ? "" : "none";
-  $("toggleRaw").textContent = "Bản gốc";
+// ── Lớp speaker (nhãn giọng, gán tên, phụ đề) ──────────────────────────────
+let SPK_NAMES = {};        // speaker_id → tên
+let curSegments = null, curSpeakerMap = {}, curDetailId = null, curHasServerAudio = false;
+const SPK_COLORS = ["#7c6cf0","#e0698a","#3fa7d6","#f2a154","#4caf88","#b57edc","#d9534f","#5b7fbd"];
+const spkColor = (spk) => SPK_COLORS[((spk % SPK_COLORS.length) + SPK_COLORS.length) % SPK_COLORS.length];
+async function loadSpeakers(){
+  try { const arr = await (await fetch("/api/speakers")).json();
+    SPK_NAMES = {}; for (const s of arr) SPK_NAMES[s.id] = s.name;
+  } catch { /* giữ nguyên */ }
+}
+function clusterLabel(spk){
+  const sid = curSpeakerMap[String(spk)];
+  if (sid && SPK_NAMES[sid]) return SPK_NAMES[sid];      // đã gán / voiceprint khớp
+  const order = Object.keys(curSpeakerMap).map(Number).sort((a,b)=>a-b);
+  const idx = order.indexOf(Number(spk));               // Unknown → "Người N" theo thứ tự cụm
+  return "Người " + (idx >= 0 ? idx + 1 : spk + 1);
+}
+
+function setResult(text, raw, segments, id, hasServerAudio, speakerMap, edited){
+  fixedText = text; rawText = raw || null; editedText = edited != null ? edited : null;
+  curView = editedText != null ? "edited" : "pass2";
+  baseTextAtOpen = editedText != null ? editedText : text;
+  curSegments = segments; curSpeakerMap = speakerMap || {}; curDetailId = id;
+  curHasServerAudio = !!(hasServerAudio && id);
+  applyView();
   renderSegments(segments);
   showAudio(id, hasServerAudio);
 }
@@ -215,25 +358,415 @@ async function openDetail(m){
   showScreen("detail");
   $("detTitle").textContent = m.title || "Bản ghi";
   downloadName = (m.title || m.id).replace(/\.[^.]+$/, "") + ".txt";
-  setResult("Đang tải…", null, null, null, false);
+  setResult("Đang tải…", null, null, null, false, null, null);
+  await loadSpeakers();
   const d = await (await fetch("/api/transcripts/" + m.id)).json();
-  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio);
+  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map, d.edited_text);
 }
-$("toggleRaw").onclick = () => { showingRaw = !showingRaw; $("result").value = showingRaw ? rawText : fixedText; $("toggleRaw").textContent = showingRaw ? "Bản sửa" : "Bản gốc"; };
+
+// ── US-801: 3 bản (sửa tay / pass 2 / máy thô) + sửa toàn văn & lưu ─────────
+const VIEW_LABELS = { edited: "Bản sửa tay", pass2: "Bản pass 2", raw: "Bản máy thô" };
+const viewText = (v) => (v === "edited" ? editedText : v === "raw" ? rawText : fixedText);
+function viewOrder(){
+  const o = [];
+  if (editedText != null) o.push("edited");
+  o.push("pass2");
+  if (rawText) o.push("raw");
+  return o;
+}
+// Bản hiệu lực (edited ?? pass 2) — dùng cho copy / tải .txt.
+const effectiveText = () => (editedText != null ? editedText : fixedText);
+function applyView(){
+  $("result").value = viewText(curView) || "";
+  $("result").readOnly = curView === "raw";        // bản máy thô chỉ xem
+  const order = viewOrder();
+  const next = order[(order.indexOf(curView) + 1) % order.length];
+  $("toggleRaw").style.display = order.length > 1 ? "" : "none";
+  $("toggleRaw").textContent = "Xem " + VIEW_LABELS[next].toLowerCase();
+  $("editedBadge").classList.toggle("hidden", editedText == null);
+  $("delEdit").style.display = editedText != null ? "" : "none";
+  updateSaveBtn();
+}
+$("toggleRaw").onclick = () => {
+  if (curView !== "raw" && $("result").value !== (viewText(curView) || "")
+      && !confirm("Bỏ nội dung đang sửa chưa lưu?")) return;
+  const order = viewOrder();
+  curView = order[(order.indexOf(curView) + 1) % order.length];
+  applyView();
+};
+// Nút Lưu chỉ hiện khi nội dung khác bản đang xem (không áp dụng cho bản máy thô).
+function updateSaveBtn(){
+  const dirty = curDetailId && curView !== "raw" && $("result").value !== (viewText(curView) || "");
+  $("saveEdit").style.display = dirty ? "" : "none";
+}
+$("result").addEventListener("input", updateSaveBtn);
+
+async function reloadDetail(){
+  if (!curDetailId) return;
+  const d = await (await fetch("/api/transcripts/" + curDetailId)).json();
+  setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map, d.edited_text);
+}
+// PATCH bản sửa tay; 409 = bản ghi đã đổi nơi khác → báo + reload. Trả true nếu lưu OK.
+async function patchText(editedVal){
+  const r = await fetch(`/api/transcripts/${curDetailId}/text`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ edited_text: editedVal, base_text: baseTextAtOpen }),
+  });
+  if (r.status === 409){
+    alert("Bản ghi đã thay đổi ở nơi khác, tải lại rồi sửa tiếp.");
+    await reloadDetail();
+    return false;
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return true;
+}
+$("saveEdit").onclick = async () => {
+  if (!curDetailId) return;
+  const text = $("result").value;
+  const b = $("saveEdit"); b.disabled = true;
+  try {
+    if (await patchText(text)){
+      editedText = text; baseTextAtOpen = text; curView = "edited";
+      applyView();
+    }
+  } catch (e) { alert("Lỗi lưu bản sửa: " + e.message); }
+  finally { b.disabled = false; }
+};
+$("delEdit").onclick = async () => {
+  if (!curDetailId || editedText == null) return;
+  if (!confirm("Xoá bản sửa tay? Sẽ dùng lại bản pass 2.")) return;
+  try {
+    if (await patchText(null)){
+      editedText = null; baseTextAtOpen = fixedText; curView = "pass2";
+      applyView();
+    }
+  } catch (e) { alert("Lỗi xoá bản sửa: " + e.message); }
+};
+
+// ── US-801: sửa từng segment inline (click vào text) ───────────────────────
+const occCount = (hay, needle) => { let c = 0, i = -1; while ((i = hay.indexOf(needle, i + 1)) >= 0) c++; return c; };
+// Thay lần xuất hiện thứ n (0-based) của oldStr trong full; không thấy → null.
+function replaceNth(full, oldStr, newStr, n){
+  let idx = -1;
+  for (let i = 0; i <= n; i++){ idx = full.indexOf(oldStr, idx + 1); if (idx < 0) return null; }
+  return full.slice(0, idx) + newStr + full.slice(idx + oldStr.length);
+}
+function editSegment(s, span){
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.className = "seg-edit"; inp.value = s.text;
+  span.replaceWith(inp); inp.focus();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return; done = true;
+    const val = inp.value.trim();
+    if (commit && val && val !== s.text) applySegmentEdit(s, val);
+    span.textContent = s.text;
+    inp.replaceWith(span);
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter"){ e.preventDefault(); finish(true); }
+    else if (e.key === "Escape"){ e.preventDefault(); finish(false); }
+  };
+  inp.onblur = () => finish(true);
+}
+// Cập nhật segment + áp thay thế chuỗi tương ứng vào bản full đang xem.
+// KHÔNG rebuild full bằng join segments (segment là ASR thô — join mất pass 2 chỗ khác).
+function applySegmentEdit(s, val){
+  const old = s.text;
+  let n = 0;   // old là lần xuất hiện thứ mấy, đếm theo các segment đứng trước
+  for (const t of curSegments){ if (t === s) break; n += occCount(t.text, old); }
+  s.text = val;
+  if (curView === "raw") return;                     // bản máy thô chỉ xem, không áp
+  const full = $("result").value;
+  const replaced = replaceNth(full, old, val, n)
+    ?? (full.includes(old) ? full.replace(old, val) : null);
+  if (replaced != null){ $("result").value = replaced; updateSaveBtn(); }
+  // không thấy chuỗi gốc trong bản full → giữ sửa ở segment, bỏ qua phần áp
+}
 function renderSegments(segments){
-  const box = $("segList"), btn = $("toggleSegs"); box.innerHTML = "";
-  if (!segments || !segments.length){ box.style.display = "none"; btn.style.display = "none"; return; }
+  const box = $("segList"), btn = $("toggleSegs");
+  const wasOpen = box.style.display !== "none";  // giữ trạng thái mở khi vẽ lại (vd sau khi đặt tên)
+  box.innerHTML = "";
+  const hasSegs = !!(segments && segments.length);
+  const hasSpk = hasSegs && segments.some(s => s.spk !== undefined);
+  // Nút tách giọng: hiện khi có segment + có file audio server để chạy lại pass 3
+  $("diarizeBtn").style.display = (hasSegs && curDetailId && curHasServerAudio) || hasSpk ? "" : "none";
+  $("diarizeBtn").textContent = hasSpk ? "Tách lại" : "Tách giọng";
+  $("dlSrt").style.display = $("dlVtt").style.display = hasSegs ? "" : "none";
+  if (!hasSegs){ box.style.display = "none"; btn.style.display = "none"; return; }
   for (const s of segments){
     const p = document.createElement("p"); p.className = "seg";
     const t = document.createElement("time"); t.textContent = fmtTime(s.start);
+    p.append(t);
+    if (s.spk !== undefined){
+      const chip = document.createElement("button");
+      chip.className = "spk-chip"; chip.style.background = spkColor(s.spk);
+      chip.textContent = clusterLabel(s.spk); chip.title = "Bấm để đặt tên";
+      chip.onclick = () => assignCluster(s.spk);
+      p.append(chip);
+    }
     const span = document.createElement("span"); span.textContent = s.text;
-    p.append(t, span); box.appendChild(p);
+    span.className = "seg-txt"; span.title = "Bấm để sửa";
+    span.onclick = () => editSegment(s, span);
+    p.append(span); box.appendChild(p);
   }
-  box.style.display = "none"; btn.style.display = ""; btn.textContent = "Mốc thời gian";
+  box.style.display = wasOpen ? "" : "none";
+  btn.style.display = ""; btn.textContent = wasOpen ? "Ẩn mốc" : "Mốc thời gian";
 }
 $("toggleSegs").onclick = () => { const h = $("segList").style.display === "none"; $("segList").style.display = h ? "" : "none"; $("toggleSegs").textContent = h ? "Ẩn mốc" : "Mốc thời gian"; };
-$("copy").onclick = () => { navigator.clipboard.writeText($("result").value); $("copy").textContent = "Đã copy!"; setTimeout(()=>$("copy").textContent="Copy",1200); };
-$("download").onclick = () => { const b = new Blob([$("result").value],{type:"text/plain"}); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = downloadName; a.click(); };
+
+async function assignCluster(spk){
+  const cur = SPK_NAMES[curSpeakerMap[String(spk)]] || "";
+  const name = prompt("Tên người cho giọng này (để trống = bỏ gán):", cur);
+  if (name === null) return;
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/speaker-map`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cluster: spk, name: name.trim() }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    curSpeakerMap = j.speaker_map;
+    SPK_NAMES = { ...SPK_NAMES, ...(j.speakers || {}) };
+    renderSegments(curSegments);
+    // US-703: ghi nhớ giọng để tự nhận diện bản ghi sau.
+    const sid = curSpeakerMap[String(spk)];
+    if (sid && diarizeReady && confirm(`Ghi nhớ giọng "${SPK_NAMES[sid]}" để tự nhận diện lần sau?`))
+      await enrollCluster(sid, spk);
+  } catch (e) { alert("Lỗi gán tên: " + e.message); }
+}
+async function enrollCluster(speakerId, spk){
+  try {
+    const r = await fetch(`/api/speakers/${speakerId}/enroll`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript_id: curDetailId, cluster: spk }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+  } catch (e) { alert("Lỗi ghi nhớ giọng: " + e.message); }
+}
+
+// ── Quản lý giọng đã lưu (Cài đặt) ─────────────────────────────────────────
+async function loadSpeakerList(){
+  const box = $("speakerList");
+  let arr = [];
+  try { arr = await (await fetch("/api/speakers")).json(); } catch { return; }
+  if (!arr.length){ box.innerHTML = '<small style="color:var(--faint)">Chưa có giọng nào được ghi nhớ.</small>'; return; }
+  box.innerHTML = "";
+  for (const s of arr){
+    const row = document.createElement("div"); row.className = "spk-row";
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = s.name;
+    const ct = document.createElement("span"); ct.className = "ct";
+    ct.textContent = s.voiceprints ? `${s.voiceprints} mẫu giọng` : "chưa có mẫu giọng";
+    const rg = document.createElement("select"); rg.title = "Giọng miền nào";
+    for (const [v, lbl] of SPK_REGIONS){
+      const o = document.createElement("option"); o.value = v; o.textContent = lbl; rg.append(o);
+    }
+    rg.value = s.region || "";
+    rg.onchange = () => setSpeakerRegion(s.id, rg.value);
+    const ren = document.createElement("button"); ren.className = "mini"; ren.textContent = "Đổi tên";
+    ren.onclick = () => renameSpeaker(s.id, s.name);
+    const del = document.createElement("button"); del.className = "mini"; del.textContent = "Xoá";
+    del.onclick = () => deleteSpeaker(s.id, s.name);
+    row.append(nm, ct, rg, ren, del); box.appendChild(row);
+  }
+}
+const SPK_REGIONS = [["", "(trống)"], ["bac", "Bắc"], ["trung", "Trung"], ["nam", "Nam"]];
+async function setSpeakerRegion(id, region){
+  await fetch(`/api/speakers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ region }) });
+  loadSpeakerList();
+}
+async function renameSpeaker(id, cur){
+  const name = prompt("Đổi tên người:", cur);
+  if (!name || !name.trim()) return;
+  await fetch(`/api/speakers/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+  loadSpeakerList();
+}
+async function deleteSpeaker(id, name){
+  if (!confirm(`Xoá giọng "${name}"? Các bản ghi đã gán sẽ trở về chưa đặt tên.`)) return;
+  await fetch(`/api/speakers/${id}`, { method: "DELETE" });
+  loadSpeakerList();
+}
+
+// ── US-802: Thư viện từ — cặp sửa lỗi (Settings, load lười khi mở mục) ─────
+const CORR_SRC = { user: "Bạn sửa", seed: "Có sẵn", remote: "Tải về" };
+const CORR_ST = { pending: "Chờ duyệt", approved: "Đã duyệt", rejected: "Đã loại" };
+const CORR_TAG_SUGS = ["bắc", "trung", "nam", "en"];
+let corrFetched = false;   // chỉ fetch lần đầu mở mục, không fetch lúc khởi động
+
+$("corrToggle").onclick = () => {
+  const open = !$("corrBody").classList.toggle("hidden");
+  $("corrChevron").textContent = open ? "▾" : "▸";
+  if (open && !corrFetched){ corrFetched = true; loadCorrections(); }
+};
+["corrStatus", "corrSource", "corrTagFilter"].forEach(id => $(id).addEventListener("change", loadCorrections));
+$("corrTagFilter").addEventListener("keydown", e => { if (e.key === "Enter") loadCorrections(); });
+
+async function loadCorrections(){
+  const qs = new URLSearchParams();
+  if ($("corrStatus").value) qs.set("status", $("corrStatus").value);
+  if ($("corrSource").value) qs.set("source", $("corrSource").value);
+  const tag = $("corrTagFilter").value.trim();
+  if (tag) qs.set("tag", tag);
+  const q = qs.toString();
+  try {
+    const r = await fetch("/api/corrections" + (q ? "?" + q : ""));
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    renderCorrections(await r.json());
+  } catch (e) { alert("Lỗi tải thư viện từ: " + e.message); }
+}
+function renderCorrections(arr){
+  const box = $("corrList");
+  box.innerHTML = "";
+  if (!arr.length){
+    const filtered = $("corrStatus").value || $("corrSource").value || $("corrTagFilter").value.trim();
+    box.innerHTML = `<small style="color:var(--faint)">${filtered
+      ? "Không có cặp nào khớp bộ lọc."
+      : "Chưa có cặp nào — sửa transcript trong màn chi tiết để app bắt đầu học."}</small>`;
+    return;
+  }
+  for (const c of arr) box.appendChild(corrRow(c));
+}
+const corrMini = (label, fn, pri) => {
+  const b = document.createElement("button");
+  b.className = "mini" + (pri ? " pri" : ""); b.textContent = label; b.onclick = fn;
+  return b;
+};
+function corrRow(c){
+  const row = document.createElement("div"); row.className = "corr-item";
+  const pair = document.createElement("div"); pair.className = "corr-pair";
+  const w = document.createElement("span"); w.className = "w"; w.textContent = c.wrong;
+  const r = document.createElement("span"); r.className = "r"; r.textContent = c.right;
+  pair.append(w, " → ", r);
+  const meta = document.createElement("div"); meta.className = "corr-meta";
+  const tag = document.createElement("button"); tag.className = "chip corr-tag";
+  tag.textContent = c.tag ? "🏷 " + c.tag : "🏷 tag…"; tag.title = "Bấm để sửa tag";
+  tag.onclick = () => editCorrTag(c, tag);
+  const src = document.createElement("span"); src.className = "chip";
+  src.textContent = CORR_SRC[c.source] || c.source;
+  const ct = document.createElement("span"); ct.className = "chip"; ct.textContent = "×" + (c.count || 0);
+  const st = document.createElement("span"); st.className = "chip badge-" + c.status;
+  st.textContent = CORR_ST[c.status] || c.status;
+  meta.append(tag, src, ct, st);
+  const acts = document.createElement("div"); acts.className = "corr-acts";
+  if (c.status !== "approved") acts.append(corrMini("✓ Duyệt", () => patchCorrection(c.id, { status: "approved" }), true));
+  if (c.status !== "rejected") acts.append(corrMini("✕ Loại", () => patchCorrection(c.id, { status: "rejected" })));
+  acts.append(corrMini("🗑", () => deleteCorrection(c)));
+  meta.append(acts);
+  row.append(pair, meta);
+  return row;
+}
+// Re-render cả list sau mỗi hành động (giữ style codebase).
+async function patchCorrection(id, body){
+  try {
+    const r = await fetch("/api/corrections/" + id, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { alert("Lỗi cập nhật cặp sửa lỗi: " + e.message); }
+  loadCorrections();
+}
+async function deleteCorrection(c){
+  if (!confirm(`Xoá cặp "${c.wrong} → ${c.right}"?`)) return;
+  try {
+    const r = await fetch("/api/corrections/" + c.id, { method: "DELETE" });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { alert("Lỗi xoá cặp sửa lỗi: " + e.message); }
+  loadCorrections();
+}
+// ── US-804: seed lexicon vùng miền + cập nhật online (opt-in) ──────────────
+const LEX_IDS = { lexBac: "bac", lexTrung: "trung", lexNam: "nam", lexEn: "en" };
+Object.entries(LEX_IDS).forEach(([id, key]) => $(id).addEventListener("change", async () => {
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ["lexicon_" + key]: $(id).checked }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { $(id).checked = !$(id).checked; alert("Lỗi bật/tắt từ địa phương: " + e.message); }
+  loadCorrections();
+}));
+function syncLexBtn(){
+  const has = !!$("lexUrl").value.trim();
+  $("lexUpdate").disabled = !has;
+  $("lexUpdate").title = has ? "Tải cặp mới từ nguồn đã cấu hình" : "Nhập URL nguồn cập nhật trước";
+}
+$("lexUrl").addEventListener("input", syncLexBtn);
+$("lexUrl").addEventListener("change", () => putLexiconUrl($("lexUrl").value.trim()));
+async function putLexiconUrl(url){
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lexicon_url: url }),
+    });
+    if (!r.ok) throw new Error(r.statusText);
+  } catch (e) { console.warn("Chưa sync URL thư viện lên server:", e.message); }
+}
+$("lexUpdate").onclick = async () => {
+  await putLexiconUrl($("lexUrl").value.trim());  // chốt URL trước khi gọi update
+  try {
+    const r = await fetch("/api/lexicon/update", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    alert(`Đã nhập ${d.imported} cặp mới.`);
+    loadCorrections();
+  } catch (e) { alert("Lỗi cập nhật thư viện: " + e.message); }
+};
+
+// Sửa tag inline: Enter lưu, Esc/blur huỷ; chip gợi ý nhanh (mousedown để thắng blur).
+function editCorrTag(c, tagBtn){
+  const wrap = document.createElement("span"); wrap.className = "tag-editwrap";
+  const inp = document.createElement("input");
+  inp.className = "tag-edit"; inp.value = c.tag || ""; inp.placeholder = "tag…";
+  const sugs = document.createElement("span"); sugs.className = "tag-sugs";
+  let done = false;
+  const save = (val) => { if (done) return; done = true; patchCorrection(c.id, { tag: val.trim() }); };
+  const cancel = () => { if (done) return; done = true; wrap.replaceWith(tagBtn); };
+  for (const t of CORR_TAG_SUGS){
+    const s = document.createElement("button"); s.className = "chip"; s.textContent = t;
+    s.onmousedown = (e) => { e.preventDefault(); save(t); };   // trước blur của input
+    sugs.append(s);
+  }
+  wrap.append(inp, sugs);
+  tagBtn.replaceWith(wrap);
+  inp.focus();
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter"){ e.preventDefault(); save(inp.value); }
+    else if (e.key === "Escape"){ e.preventDefault(); cancel(); }
+  };
+  inp.onblur = cancel;
+}
+
+function downloadSub(fmt){
+  if (!curDetailId) return;
+  const a = document.createElement("a");
+  a.href = `/api/transcripts/${curDetailId}/subtitle?format=${fmt}`;
+  a.download = downloadName.replace(/\.txt$/, "." + fmt);
+  a.click();
+}
+$("dlSrt").onclick = () => downloadSub("srt");
+$("dlVtt").onclick = () => downloadSub("vtt");
+
+$("diarizeBtn").onclick = async () => {
+  if (!curDetailId) return;
+  const named = Object.values(curSpeakerMap).some(v => v);
+  if (named && !confirm("Tách giọng lại sẽ xoá các tên đã gán cho bản ghi này. Tiếp tục?")) return;
+  const b = $("diarizeBtn"); b.disabled = true; const old = b.textContent; b.textContent = "Đang tách…";
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/diarize`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    curSegments = j.segments; curSpeakerMap = j.speaker_map;
+    renderSegments(curSegments);
+    $("segList").style.display = ""; $("toggleSegs").textContent = "Ẩn mốc";
+  } catch (e) { alert("Lỗi tách giọng: " + e.message); }
+  finally { b.disabled = false; b.textContent = old; }
+};
+// Copy / tải .txt dùng bản hiệu lực (edited ?? pass 2), không phụ thuộc bản đang xem.
+$("copy").onclick = () => { navigator.clipboard.writeText(effectiveText()); $("copy").textContent = "Đã copy!"; setTimeout(()=>$("copy").textContent="Copy",1200); };
+$("download").onclick = () => { const b = new Blob([effectiveText()],{type:"text/plain"}); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = downloadName; a.click(); };
 
 // ── Upload → transcribe ────────────────────────────────────────────────────
 const fileInput = $("file"), drop = $("drop"), go = $("go");
@@ -366,13 +899,62 @@ const subs = $("subtitles"), recTimer = $("recTimer"), recPill = $("recPill"), r
 let live = null;   // {conn, ctx, stream, opfs, stopping, deadline, paused, base, resumeAt, timer}
 let tw = null;
 
-function enterRecord(){ showScreen("record"); if (!live) startLive(); }
+function enterRecord(){
+  showScreen("record");
+  if (live){ showStartCard(false); return; }   // đang ghi → về thẳng màn ghi
+  showStartCard(true);
+  loadParticipants();
+}
+function showStartCard(on){
+  $("startCard").classList.toggle("hidden", !on);
+  $("recBody").classList.toggle("hidden", on);
+}
+
+// ── Thẻ chuẩn bị: tên họp + agenda + người tham gia (nhớ lần trước) ────────
+const PART_KEY = "manju.participants";
+let partList = [];   // speakers đang hiện checkbox, giữ nguyên kiểu id
+async function loadParticipants(){
+  const box = $("mtParticipants");
+  box.innerHTML = ""; partList = [];
+  box.classList.add("hidden"); $("mtPartLbl").classList.add("hidden");
+  let arr = [];
+  try { arr = await (await fetch("/api/speakers")).json(); } catch { return; }   // lỗi → ẩn list, vẫn cho Bắt đầu
+  if (!arr.length) return;
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(PART_KEY)) || []; } catch {}
+  const savedIds = saved.map(String);
+  partList = arr;
+  for (const s of arr){
+    const lb = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = savedIds.includes(String(s.id));
+    lb.append(cb, " " + s.name);
+    box.appendChild(lb);
+  }
+  box.classList.remove("hidden"); $("mtPartLbl").classList.remove("hidden");
+}
+function checkedParticipants(){
+  const ids = [];
+  $("mtParticipants").querySelectorAll("input").forEach((cb, i) => { if (cb.checked && partList[i]) ids.push(partList[i].id); });
+  return ids;
+}
+$("startBtn").onclick = () => {
+  if (live) return;
+  const ids = checkedParticipants();
+  localStorage.setItem(PART_KEY, JSON.stringify(ids));
+  const meta = {};
+  if (ids.length) meta.participants = ids;
+  const title = $("mtTitle").value.trim(); if (title) meta.title = title;
+  const agenda = $("mtAgenda").value.trim(); if (agenda) meta.agenda = agenda;
+  showStartCard(false);
+  startLive(meta);
+};
 function setPill(text, on){ recPill.innerHTML = `<span class="dot"></span> ${text}`; recPill.classList.toggle("live", !!on); }
 function setWave(state){ wave.classList.toggle("on", state === "on"); wave.classList.toggle("paused", state === "paused"); }
 
 function tickTimer(){ if (!live) return; const el = live.base + (live.paused ? 0 : (Date.now() - live.resumeAt)/1000); recTimer.textContent = fmtClock(el); }
 
-async function startLive(){
+async function startLive(meta){
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
@@ -389,7 +971,7 @@ async function startLive(){
   const useOpfs = storeAudioLocal && HAS_OPFS;
   const conn = new LiveConn(
     { type:"start", language:$("lang").value, glossary:$("prompt").value,
-      correct:$("correct").checked, store_audio: !useOpfs },
+      correct:$("correct").checked, store_audio: !useOpfs, ...(meta || {}) },
     handleLiveMsg,
     (state) => {
       if (!live) return;
@@ -429,11 +1011,14 @@ function handleLiveMsg(m){
   } else if (m.type === "final"){
     stopTypewriter(m.utt); const el = subEl(m.utt);
     if (!m.text){ el.remove(); return; }
-    el.textContent = m.text; el.classList.remove("partial"); autoscroll();
-  } else if (m.type === "corrected"){
-    if (!m.changed) return;
+    setLine(el, m.text); el.classList.remove("partial"); autoscroll();
+  } else if (m.type === "corrected" || m.type === "revise"){
+    if (m.type === "corrected" && !m.changed) return;
     const el = subs.querySelector(`[data-utt="${m.utt}"]`);
-    if (el){ el.textContent = m.text; el.classList.remove("fixed"); void el.offsetWidth; el.classList.add("fixed"); }
+    if (el){ setLine(el, m.text); el.classList.remove("fixed"); void el.offsetWidth; el.classList.add("fixed"); }
+  } else if (m.type === "speaker"){
+    const el = subs.querySelector(`[data-utt="${m.utt}"]`);
+    if (el){ el.dataset.spk = m.name; setLine(el, el.dataset.raw != null ? el.dataset.raw : el.textContent); }
   } else if (m.type === "saved"){
     const id = m.transcript_id;
     const opfsDone = live && live.opfs ? live.opfs.finish() : Promise.resolve(null);
@@ -448,6 +1033,8 @@ function handleLiveMsg(m){
   }
 }
 function subEl(utt){ let el = subs.querySelector(`[data-utt="${utt}"]`); if (!el){ el = document.createElement("p"); el.className = "line"; el.dataset.utt = utt; subs.appendChild(el); } return el; }
+// Vẽ 1 dòng subtitle: giữ text gốc trong dataset.raw, thêm "Tên: " nếu đã biết người nói.
+function setLine(el, text){ el.dataset.raw = text; el.textContent = el.dataset.spk ? el.dataset.spk + ": " + text : text; }
 function startTypewriter(utt, el){ if (tw) stopTypewriter(tw.utt); tw = { utt, el, displayed:"", target:"", timer:setInterval(revealWord, 70) }; }
 function retarget(text){ if (!tw) return; let p = 0; while (p < tw.displayed.length && p < text.length && tw.displayed[p] === text[p]) p++; if (p < tw.displayed.length){ tw.displayed = tw.displayed.slice(0, p); tw.el.textContent = tw.displayed; } tw.target = text; }
 function revealWord(){ if (!tw || tw.displayed.length >= tw.target.length) return; const rest = tw.target.slice(tw.displayed.length); const m = rest.match(/^\s*\S+/); tw.displayed += m ? m[0] : rest; tw.el.textContent = tw.displayed; autoscroll(); }
@@ -503,4 +1090,5 @@ loadSettings();
 loadServerSettings();
 loadHistory();
 // Deep-link tiện dụng (và để xem trước từng màn): #settings / #upload / #record.
-if (["#settings","#upload","#record"].includes(location.hash)) showScreen(location.hash.slice(1));
+if (location.hash === "#record") enterRecord();
+else if (["#settings","#upload"].includes(location.hash)) showScreen(location.hash.slice(1));

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import db, engines
+from app import corrections, db, diarize, engines
 from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
@@ -51,6 +51,7 @@ class TranscriptDraft:
     raw_text: str | None = None
     segments: list[dict] | None = None
     audio_path: Path | None = None
+    speaker_map: dict | None = None  # pass 3: {cụm local: speaker_id | null}
 
 
 # ── Quản lý job (in-memory) ───────────────────────────────────────────────
@@ -120,12 +121,16 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         if engine.info.tier == "cpu" and spec.model_name in ALLOWED_MODELS
         else None
     )
+    # US-803: glossary hiệu lực = glossary user + term approved từ thư viện
+    # (build_bias never-fail) — tính 1 lần, dùng cho cả mồi Whisper lẫn pass 2.
+    glossary = corrections.build_bias(spec.prompt)
     result = engine.transcribe_file(
         audio_path,
-        engines.DecodeSpec(spec.language, spec.prompt, override),
+        engines.DecodeSpec(spec.language, glossary, override),
         lambda text, p: _update(job_id, text=text, progress=p),
     )
-    full_text, corrected = _maybe_correct(job_id, result.text, spec)
+    full_text, corrected = _maybe_correct(job_id, result.text, spec, glossary)
+    segments, speaker_map = _maybe_diarize(job_id, audio_path, result.segments)
     transcript_id = save_transcript(TranscriptDraft(
         original_name=spec.filename,
         language=spec.language,
@@ -133,21 +138,53 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         text=full_text,
         model_name=override or engine.info.model_name,
         raw_text=result.text if corrected and full_text != result.text else None,
-        segments=result.segments or None,
+        segments=segments or None,
+        speaker_map=speaker_map,
         # Giữ lại file upload gốc để nghe/tải lại (save_transcript sẽ dời đi).
         audio_path=audio_path,
     ))
     _update(job_id, status="done", text=full_text, progress=1.0, transcript_id=transcript_id)
 
 
-def _maybe_correct(job_id: str, text: str, spec: JobSpec) -> tuple[str, bool]:
-    """Pass 2: LLM soát lại thuật ngữ tiếng Anh bị phiên âm sai."""
+def _maybe_correct(job_id: str, text: str, spec: JobSpec, glossary: str) -> tuple[str, bool]:
+    """Pass 2: LLM soát lại thuật ngữ tiếng Anh bị phiên âm sai.
+    `glossary` là bản đã merge thư viện (build_bias) — dùng chung với ASR."""
     if not (spec.correct and text):
         return text, False
     _update(job_id, status="correcting", progress=0.0)
     return correct_text(
-        text, glossary=spec.prompt, on_progress=lambda p: _update(job_id, progress=p)
+        text,
+        glossary=glossary,
+        on_progress=lambda p: _update(job_id, progress=p),
+        # Few-shot cặp (sai → đúng) đã duyệt — top_pairs never-fail (US-803).
+        pairs=tuple(corrections.top_pairs()),
     )
+
+
+def diarize_enabled() -> bool:
+    return db.get_setting("diarize_enabled") == "1"
+
+
+def _maybe_diarize(
+    job_id: str, audio_path: Path | None, segments: list[dict] | None
+) -> tuple[list[dict] | None, dict | None]:
+    """Pass 3: gán giọng cho từng segment. Never-fail — lỗi/thiếu model →
+    trả segment gốc, transcript vẫn lưu (US-701 AC2)."""
+    if not (segments and audio_path and diarize_enabled() and diarize.models_present()):
+        return segments, None
+    _update(job_id, status="diarizing", progress=0.0)
+    try:
+        spans = diarize.diarize_file(audio_path)
+    except Exception:  # noqa: BLE001 — pass 3 không được làm hỏng transcript
+        return segments, None
+    if not spans:  # audio ngắn / 1 giọng
+        return segments, None
+    labeled = diarize.assign_speakers(segments, spans)
+    smap = diarize.initial_speaker_map(labeled)
+    # US-703: tự gán tên cho cụm khớp voiceprint đã enroll.
+    vps = diarize.to_np_voiceprints(db.load_voiceprints())
+    smap = diarize.identify_clusters(audio_path, labeled, smap, vps)
+    return labeled, smap
 
 
 def _store_audio(transcript_id: str, audio_path: Path | None) -> tuple[str | None, Path]:
@@ -185,6 +222,7 @@ def save_transcript(draft: TranscriptDraft) -> str:
         llm_model=llm_model_name() if draft.raw_text is not None else None,
         audio_file=audio_name,
         audio_dir=str(audio_dir) if audio_name else None,
+        speaker_map=draft.speaker_map,
     ))
     return transcript_id
 

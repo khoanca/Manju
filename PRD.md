@@ -56,6 +56,22 @@ Hệ thống theo mô hình **local-first + org sync**:
 
 - Thực thi quyền bằng RLS ngay trong Postgres (không tin client).
 
+### FR-6 — Correction Library: sửa transcript + thư viện tự học (net-new 2026-07-15)
+- User sửa transcript (bản máy giữ nguyên); app trích cặp (sai → đúng) vào thư viện có duyệt, tự mồi vào ASR + pass 2 các lần sau. Seed lexicon từ địa phương Bắc/Trung/Nam + accent Anh, cập nhật online opt-in. Rolling context cho live subtitle.
+- Không fine-tune model (local-first, không GPU/training). Chi tiết US-801..805, AC, task: `docs/plan-correction-library.md`.
+
+### FR-7 — Live Intelligence: bias thông minh cho subtitle trực tiếp (net-new 2026-07-20)
+- US-806 — Topic-bias: topic (US-805) xếp lại lexicon + tiêm vào Whisper initial_prompt, refresh glossary giữa phiên.
+- US-807 — Personal lexicon (học): mine từ đặc trưng mỗi speaker từ transcript đã diarize (bảng `speaker_terms`).
+- US-808 — Personal lexicon (dùng): chọn người tham dự lúc mở live → nạp từ của họ vào bias.
+- US-809 — Metadata cuộc họp: title/agenda làm topic khởi tạo, bias từ câu đầu tiên.
+- US-810 — Region theo speaker: tag Bắc/Trung/Nam → ưu tiên cặp sửa đúng vùng miền.
+- US-811 — Revision: câu confidence thấp được re-decode nền bằng setting mạnh hơn, đẩy bản sửa qua WS.
+- US-812 — Uncertain words: word-confidence thấp báo pass 2 chỗ cần soát kỹ (opt-in).
+- US-813 — Denoise mic (noisereduce, opt-in) trước VAD; WAV lưu vẫn raw.
+- US-814 — Speaker-ID realtime: nhận diện người nói theo utterance final, tag tên + bias theo người đang nói.
+- Chi tiết AC/task: `docs/plan-live-intelligence.md` (plan doc thắng PRD khi lệch, tới khi write-back).
+
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).
 - Sync audio lên org.

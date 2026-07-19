@@ -43,6 +43,23 @@ def test_prompt_for_includes_glossary_and_context():
     assert "text cần soát" in out
 
 
+def test_prompt_for_pairs_section_before_glossary():
+    out = correct._prompt_for(
+        "text cần soát",
+        glossary="Kubernetes",
+        pairs=(("cu bơ nét", "Kubernetes"), ("đíp lôi", "deploy")),
+    )
+    assert "cu bơ nét → Kubernetes" in out
+    assert "đíp lôi → deploy" in out
+    # Section cặp đã biết đứng trước glossary (US-803)
+    assert out.index("Các cặp đã biết") < out.index("Danh sách thuật ngữ")
+
+
+def test_prompt_for_no_pairs_no_extra_section():
+    out = correct._prompt_for("text cần soát", glossary="Kubernetes")
+    assert "Các cặp đã biết" not in out
+
+
 def test_llm_model_name_follows_backend(monkeypatch):
     monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "")
     assert correct.llm_model_name() == correct.OLLAMA_MODEL

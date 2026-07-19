@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Wavelogs — Transcriber</title>
+<title>Manju — Transcriber</title>
 <link rel="manifest" href="/static/manifest.webmanifest" />
 <meta name="theme-color" content="#f97316" />
 <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
@@ -61,6 +61,23 @@
   .search{ display:flex; align-items:center; gap:10px; background:var(--card); border-radius:16px;
            padding:11px 15px; box-shadow:var(--sh-sm); margin-bottom:16px; }
   .search input{ border:none; outline:none; background:none; width:100%; font-size:15px; }
+
+  /* filter + sort panel */
+  .round-btn.on{ background:var(--accent-soft); color:var(--accent-ink); }
+  .filters{ background:var(--card); border-radius:18px; box-shadow:var(--sh-sm);
+            padding:16px; margin-bottom:16px; display:flex; flex-direction:column; gap:14px; }
+  .filters .f-block{ display:flex; flex-direction:column; gap:7px; }
+  .f-lbl{ font-size:12px; font-weight:700; color:var(--muted); letter-spacing:.2px; }
+  .filters select, .filters input{ border:1px solid var(--line); border-radius:11px;
+            padding:9px 11px; font-size:14px; background:var(--card-2); outline:none;
+            width:100%; min-width:0; }
+  .filters select{ font-weight:600; }
+  .filters select:focus, .filters input:focus{ border-color:var(--accent); }
+  .frow{ display:flex; gap:10px; }
+  .frow label{ flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:4px;
+               font-size:11px; color:var(--faint); font-weight:600; }
+  .f-clear{ align-self:flex-start; font-size:13.5px; font-weight:700; color:var(--accent-ink);
+            padding:4px 2px; }
 
   /* recording list */
   .list{ display:flex; flex-direction:column; gap:14px; }
@@ -121,6 +138,16 @@
   #subtitles .line.fixed{ animation:flash 1.3s ease-out; }
   @keyframes flash{ from{ background:var(--accent-soft); } to{ background:transparent; } }
 
+  /* Thẻ chuẩn bị trước khi ghi: tên họp + agenda + người tham gia */
+  .start-card{ background:var(--card); border-radius:24px; padding:20px; box-shadow:var(--sh);
+               display:flex; flex-direction:column; gap:8px; }
+  .start-card input, .start-card textarea{ border:1px solid var(--line); border-radius:12px;
+               padding:10px 12px; font-size:14px; background:var(--card-2); outline:none; resize:vertical; }
+  .start-card input:focus, .start-card textarea:focus{ border-color:var(--accent); }
+  .mt-parts{ display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:2px; }
+  .mt-parts label{ display:flex; align-items:center; gap:6px; font-size:14px; cursor:pointer; }
+  .start-card .go-btn{ margin-top:10px; }
+
   .rec-controls{ display:flex; gap:14px; margin-top:20px; }
   .btn-pause{ flex:1 1 auto; background:var(--card); border-radius:40px; padding:16px; box-shadow:var(--sh-sm);
               font-weight:700; font-size:15px; display:flex; align-items:center; justify-content:center; gap:8px; }
@@ -171,6 +198,40 @@
               background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); transition:.2s; }
   .sw.on{ background:var(--accent); } .sw.on::after{ left:21px; }
 
+  /* ── Thư viện từ (US-802) — cặp sửa lỗi trong Settings ── */
+  .corr-head{ width:100%; text-align:left; }
+  #corrBody{ padding:0 17px 15px; }
+  .corr-filters{ display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 4px; }
+  .corr-filters select, .corr-filters input{ flex:1 1 110px; min-width:0; border:1px solid var(--line);
+            border-radius:11px; padding:8px 10px; font-size:13px; background:var(--card-2); outline:none; }
+  .corr-filters select:focus, .corr-filters input:focus{ border-color:var(--accent); }
+  .corr-seed{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:2px 0 8px; }
+  .corr-seed small{ color:var(--muted); }
+  .corr-seed label{ display:flex; align-items:center; gap:5px; font-size:13.5px; cursor:pointer; }
+  .corr-update{ display:flex; gap:8px; margin:0 0 10px; }
+  .corr-update input{ flex:1 1 auto; min-width:0; border:1px solid var(--line); border-radius:11px;
+            padding:8px 10px; font-size:13px; background:var(--card-2); outline:none; }
+  .corr-update input:focus{ border-color:var(--accent); }
+  .corr-update .mini{ flex:0 0 auto; }
+  .corr-update .mini:disabled{ opacity:.45; }
+  .corr-item{ padding:12px 0; border-bottom:1px solid var(--line); }
+  .corr-item:last-child{ border-bottom:none; padding-bottom:2px; }
+  .corr-pair{ font-size:14.5px; overflow-wrap:anywhere; }
+  .corr-pair .w{ color:var(--muted); text-decoration:line-through; }
+  .corr-pair .r{ font-weight:700; }
+  .corr-meta{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:7px; }
+  .corr-acts{ display:flex; gap:6px; margin-left:auto; }
+  .corr-acts .mini{ padding:5px 9px; font-size:12.5px; }
+  .chip.corr-tag{ cursor:pointer; }
+  .chip.badge-pending{ background:var(--accent-soft); color:var(--accent-ink); }
+  .chip.badge-approved{ background:#eafaf1; color:#0a7a4f; }
+  .chip.badge-rejected{ background:#fdecec; color:#b91c1c; }
+  .tag-editwrap{ display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .tag-edit{ width:110px; border:1px solid var(--accent); border-radius:8px; padding:3px 8px;
+             font-size:13px; background:var(--card); outline:none; }
+  .tag-sugs{ display:flex; gap:5px; }
+  .tag-sugs .chip{ cursor:pointer; }
+
   /* ── Detail / result ──────────────────────────── */
   .det-card{ background:var(--card); border-radius:24px; padding:20px; box-shadow:var(--sh); }
   .det-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
@@ -183,8 +244,22 @@
   #result{ width:100%; border:none; background:var(--card-2); border-radius:14px; padding:14px;
            min-height:230px; font-size:15px; line-height:1.7; resize:vertical; outline:none; }
   .segs{ margin-top:14px; border-top:1px solid var(--line); padding-top:14px; max-height:320px; overflow-y:auto; }
-  .segs .seg{ display:flex; gap:12px; margin:0 0 8px; font-size:14px; }
+  .segs .seg{ display:flex; gap:12px; margin:0 0 8px; font-size:14px; align-items:baseline; }
   .segs .seg time{ color:var(--accent); font-variant-numeric:tabular-nums; flex:0 0 auto; font-weight:700; }
+  .segs .seg .seg-txt{ cursor:pointer; border-radius:6px; }
+  .segs .seg .seg-txt:hover{ background:var(--card-2); }
+  .seg-edit{ flex:1 1 auto; min-width:0; border:1px solid var(--accent); border-radius:8px;
+             padding:1px 8px; font-size:14px; background:var(--card); outline:none; }
+  .spk-chip{ flex:0 0 auto; color:#fff; font-size:12px; font-weight:700; padding:1px 9px;
+             border-radius:999px; border:none; cursor:pointer; white-space:nowrap; }
+  .spk-chip:hover{ filter:brightness(1.08); }
+  .spk-list{ display:flex; flex-direction:column; gap:2px; }
+  .spk-row{ display:flex; align-items:center; gap:12px; padding:8px 2px; }
+  .spk-row .nm{ font-weight:600; flex:1 1 auto; }
+  .spk-row .ct{ color:var(--faint); font-size:12px; flex:0 0 auto; }
+  .spk-row .mini{ flex:0 0 auto; }
+  .spk-row select{ flex:0 0 auto; border:1px solid var(--line); border-radius:10px;
+                   padding:5px 8px; font-size:13px; background:var(--card-2); outline:none; }
 
   /* upload */
   .drop{ border:2px dashed #d7dbe1; border-radius:18px; padding:34px 20px; text-align:center; color:var(--muted);
@@ -215,7 +290,10 @@
 
   /* Mobile: form control ≥16px để iOS Safari không tự zoom khi focus */
   @media (max-width:899px){
-    .search input, .set-row select, .set-row textarea, #audioDir, #result{ font-size:16px; }
+    .search input, .set-row select, .set-row textarea, #audioDir, #result,
+    .filters select, .filters input, .seg-edit,
+    .corr-filters select, .corr-filters input, .corr-update input, .tag-edit,
+    .start-card input, .start-card textarea, .spk-row select{ font-size:16px; }
   }
 
   /* Điện thoại nhỏ (<380px): giảm padding & cỡ chữ lớn cho khỏi tràn */
@@ -319,7 +397,7 @@
   <aside class="sidebar">
     <div class="brand side-brand">
       <span class="mark"><i style="height:8px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:13px"></i><i style="height:7px"></i></span>
-      <b>Wavelogs</b><sup>®</sup>
+      <b>Manju</b><sup>®</sup>
     </div>
     <nav class="side-nav">
       <button class="navlink active" data-tab="home">
@@ -344,17 +422,57 @@
     <div class="top">
       <div class="brand only-mobile">
         <span class="mark"><i style="height:8px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:13px"></i><i style="height:7px"></i></span>
-        <b>Wavelogs</b><sup>®</sup>
+        <b>Manju</b><sup>®</sup>
       </div>
       <div class="page-title only-desktop" style="margin:0">Bản ghi</div>
       <div class="h-actions">
-        <button class="round-btn" id="searchBtn" title="Tìm">🔍</button>
+        <button class="round-btn" id="searchBtn" title="Tìm theo tên">🔍</button>
+        <button class="round-btn" id="filterBtn" title="Lọc &amp; sắp xếp">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+        </button>
         <button class="round-btn" id="addBtn" title="Tải file lên">＋</button>
       </div>
     </div>
 
     <div class="search hidden" id="searchBox">
       <span>🔍</span><input id="searchInput" placeholder="Tìm theo tên bản ghi…" />
+    </div>
+
+    <!-- Lọc & sắp xếp bản ghi (client-side; dữ liệu đã có sẵn từ /api/transcripts) -->
+    <div class="filters hidden" id="filters">
+      <div class="f-block">
+        <label class="f-lbl" for="sortBy">Sắp xếp</label>
+        <select id="sortBy">
+          <option value="date-desc">Ngày: mới → cũ</option>
+          <option value="date-asc">Ngày: cũ → mới</option>
+          <option value="title-asc">Tên: A → Z</option>
+          <option value="title-desc">Tên: Z → A</option>
+          <option value="dur-desc">Thời lượng: dài → ngắn</option>
+          <option value="dur-asc">Thời lượng: ngắn → dài</option>
+        </select>
+      </div>
+      <div class="f-block">
+        <span class="f-lbl">Ngày ghi</span>
+        <div class="frow">
+          <label>Từ<input id="fDateFrom" type="date" /></label>
+          <label>Đến<input id="fDateTo" type="date" /></label>
+        </div>
+      </div>
+      <div class="f-block">
+        <span class="f-lbl">Thời gian trong ngày</span>
+        <div class="frow">
+          <label>Từ<input id="fTimeFrom" type="time" /></label>
+          <label>Đến<input id="fTimeTo" type="time" /></label>
+        </div>
+      </div>
+      <div class="f-block">
+        <span class="f-lbl">Thời lượng (phút)</span>
+        <div class="frow">
+          <label>Tối thiểu<input id="fDurMin" type="number" min="0" inputmode="numeric" placeholder="0" /></label>
+          <label>Tối đa<input id="fDurMax" type="number" min="0" inputmode="numeric" placeholder="∞" /></label>
+        </div>
+      </div>
+      <button class="f-clear" id="fClear">Xoá bộ lọc</button>
     </div>
 
     <ul class="list" id="history" style="list-style:none;padding:0;margin:0"></ul>
@@ -367,6 +485,18 @@
       <span class="title">Recording</span>
     </div>
 
+    <!-- Thẻ chuẩn bị: tên họp + agenda + người tham gia, bấm Bắt đầu mới ghi -->
+    <div class="start-card" id="startCard">
+      <span class="f-lbl">Tên cuộc họp</span>
+      <input id="mtTitle" placeholder="VD: Họp sprint tuần này…" />
+      <span class="f-lbl">Agenda</span>
+      <textarea id="mtAgenda" rows="2" placeholder="Nội dung dự kiến (tuỳ chọn)…"></textarea>
+      <span class="f-lbl hidden" id="mtPartLbl">Người tham gia</span>
+      <div class="mt-parts hidden" id="mtParticipants"></div>
+      <button class="go-btn" id="startBtn">Bắt đầu</button>
+    </div>
+
+    <div id="recBody" class="hidden" style="display:contents">
     <div class="hero">
       <span class="spark" style="left:22px;top:26px">✦</span>
       <span class="spark" style="right:30px;bottom:60px;font-size:14px">✦</span>
@@ -386,6 +516,7 @@
       <button class="btn-stop" id="recStop">■ Stop</button>
     </div>
     <div class="rec-hint" id="recHint">Bấm Stop để kết thúc — văn bản &amp; file ghi âm tự lưu.</div>
+    </div>
   </section>
 
   <!-- ══════ SETTINGS ══════ -->
@@ -426,6 +557,21 @@
         <div class="sw on" id="swCorrect"></div>
         <input type="checkbox" id="correct" checked class="hidden" />
       </div>
+      <div class="set-row" id="rowDiarize">
+        <div class="set-ico">🗣️</div>
+        <div class="set-main"><b>Nhận diện người nói</b><small id="diarizeHint">Pass 3 — tách "ai nói câu nào" (cần tải model)</small></div>
+        <div class="sw" id="swDiarize"></div>
+      </div>
+      <div class="set-row" id="rowFlagWords">
+        <div class="set-ico">🚩</div>
+        <div class="set-main"><b>Đánh dấu từ nghe không rõ cho pass 2</b><small>Chậm hơn một chút</small></div>
+        <div class="sw" id="swFlagWords"></div>
+      </div>
+      <div class="set-row" id="rowDenoise">
+        <div class="set-ico">🎛️</div>
+        <div class="set-main"><b>Khử ồn micro</b><small>Thử nghiệm</small></div>
+        <div class="sw" id="swDenoise"></div>
+      </div>
     </div>
 
     <div class="sec-label">Thuật ngữ / ngữ cảnh</div>
@@ -458,6 +604,49 @@
         <div class="set-val">1.1.0</div>
       </div>
     </div>
+
+    <div class="sec-label">Giọng đã lưu</div>
+    <div class="set-card">
+      <div id="speakerList" class="spk-list"><small style="color:var(--faint)">Chưa có giọng nào được ghi nhớ.</small></div>
+    </div>
+
+    <div class="sec-label">Thư viện từ</div>
+    <div class="set-card">
+      <button class="set-row corr-head" id="corrToggle">
+        <div class="set-ico">📚</div>
+        <div class="set-main"><b>Thư viện từ</b><small>Cặp sửa lỗi app học từ chỉnh sửa của bạn — chỉ cặp Đã duyệt được dùng để mồi ASR/pass 2</small></div>
+        <div class="set-val" id="corrChevron">▸</div>
+      </button>
+      <div class="hidden" id="corrBody">
+        <div class="corr-seed">
+          <small>Từ địa phương:</small>
+          <label><input type="checkbox" id="lexBac"/> Bắc</label>
+          <label><input type="checkbox" id="lexTrung"/> Trung</label>
+          <label><input type="checkbox" id="lexNam"/> Nam</label>
+          <label><input type="checkbox" id="lexEn"/> Accent Anh</label>
+        </div>
+        <div class="corr-update">
+          <input id="lexUrl" placeholder="URL nguồn cập nhật (tuỳ chọn)…" />
+          <button class="mini pri" id="lexUpdate" disabled title="Nhập URL nguồn cập nhật trước">Cập nhật thư viện</button>
+        </div>
+        <div class="corr-filters">
+          <select id="corrStatus" title="Trạng thái">
+            <option value="">Tất cả</option>
+            <option value="pending">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Đã loại</option>
+          </select>
+          <select id="corrSource" title="Nguồn">
+            <option value="">Mọi nguồn</option>
+            <option value="user">Bạn sửa</option>
+            <option value="seed">Có sẵn</option>
+            <option value="remote">Tải về</option>
+          </select>
+          <input id="corrTagFilter" placeholder="Tag…" />
+        </div>
+        <div id="corrList"></div>
+      </div>
+    </div>
   </section>
 
   <!-- ══════ UPLOAD ══════ -->
@@ -483,11 +672,17 @@
     <div class="back-row">
       <button class="round-btn" data-back>‹</button>
       <span class="title" id="detTitle">Bản ghi</span>
+      <span class="chip audio hidden" id="editedBadge">✎ đã sửa tay</span>
     </div>
     <div class="det-card">
       <div class="det-actions">
         <button class="mini" id="toggleSegs" style="display:none">Mốc thời gian</button>
-        <button class="mini" id="toggleRaw" style="display:none">Bản gốc</button>
+        <button class="mini" id="toggleRaw" style="display:none">Xem bản khác</button>
+        <button class="mini pri" id="saveEdit" style="display:none">Lưu bản sửa</button>
+        <button class="mini" id="delEdit" style="display:none">Xoá bản sửa tay</button>
+        <button class="mini" id="diarizeBtn" style="display:none">Tách giọng</button>
+        <button class="mini" id="dlSrt" style="display:none">SRT</button>
+        <button class="mini" id="dlVtt" style="display:none">VTT</button>
         <button class="mini" id="copy">Copy</button>
         <button class="mini pri" id="download">Tải .txt</button>
       </div>

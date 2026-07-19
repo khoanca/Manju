@@ -8,3 +8,5 @@ data/manju.db*
 .uv/
 .DS_Store
 .env
+# Model diarization/embedding ONNX — tải qua scripts/fetch_diarize_models.py
+models/

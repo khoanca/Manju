@@ -38,6 +38,15 @@ def test_build_payload_maps_columns_and_omits_audio():
     assert "owner_id" not in payload
 
 
+def test_build_payload_prefers_edited_text():
+    """Bản user sửa tay là bản chính khi push (US-801 AC2)."""
+    transcript = {
+        "id": "t1", "title": "Họp", "language": "vi",
+        "text": "bản máy", "edited_text": "bản user sửa",
+    }
+    assert org.build_payload("org-1", transcript)["text"] == "bản user sửa"
+
+
 def test_push_raises_when_not_configured(monkeypatch):
     monkeypatch.setattr(org, "SUPABASE_URL", "")
     monkeypatch.setattr(org, "SUPABASE_ANON_KEY", "")
