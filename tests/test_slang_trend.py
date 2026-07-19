@@ -48,6 +48,11 @@ def _mock_llm(monkeypatch, payload: str):
     monkeypatch.setattr(correct, "chat_once", lambda system, user, timeout=0: payload)
 
 
+def _mock_web(monkeypatch, result=([], 0, 0, 0)):
+    """Chặn adapter web (US-817) trong test US-816 — không gọi mạng thật."""
+    monkeypatch.setattr(slang_trend, "web_digest", lambda: result)
+
+
 # ── _parse_entries: validate lỏng, skip-not-raise ──────────────────────────
 def test_parse_entries_skips_garbage():
     data = _GOOD + [
@@ -80,6 +85,7 @@ def test_parse_entries_caps_max_entries():
 # ── run_trend_update: nhập pending, never-fail theo nguồn ──────────────────
 def test_run_trend_update_imports_pending(tmp_db, monkeypatch):
     _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    _mock_web(monkeypatch)
     res = run_trend_update()
     assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 0)
     rows = db.list_corrections(source="trend")
@@ -95,6 +101,7 @@ def test_run_trend_update_llm_down_returns_zero_sources(tmp_db, monkeypatch):
         raise RuntimeError("mạng rớt")
 
     monkeypatch.setattr(correct, "chat_once", boom)
+    _mock_web(monkeypatch)
     res = run_trend_update()
     assert (res.sources_ok, res.sources_skipped, res.new_pending) == (0, 1, 0)
     assert db.list_corrections(source="trend") == []
@@ -102,6 +109,7 @@ def test_run_trend_update_llm_down_returns_zero_sources(tmp_db, monkeypatch):
 
 def test_pending_trend_excluded_from_bias_until_approved(tmp_db, monkeypatch):
     _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    _mock_web(monkeypatch)
     run_trend_update()
     assert "gét gô mới" not in build_bias("")
     row = next(r for r in db.list_corrections(source="trend") if r["right"] == "gét gô mới")
@@ -124,15 +132,83 @@ def test_endpoint_502_when_all_sources_fail(client, monkeypatch):
         raise RuntimeError("mạng rớt")
 
     monkeypatch.setattr(correct, "chat_once", boom)
+    _mock_web(monkeypatch, ([], 0, 0, 1))
     assert client.post("/api/lexicon/slang-trend").status_code == 502
 
 
 def test_endpoint_imports_and_returns_counts(client, monkeypatch):
     monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "k")
     _mock_llm(monkeypatch, json.dumps(_GOOD + [{"wrong": "x", "right": "x"}], ensure_ascii=False))
+    _mock_web(monkeypatch)
     r = client.post("/api/lexicon/slang-trend")
     assert r.status_code == 200
     d = r.json()
     assert (d["new_pending"], d["skipped"], d["sources_ok"]) == (2, 1, 1)
     rows = client.get("/api/corrections", params={"status": "pending", "source": "trend"}).json()
     assert len(rows) == 2
+
+
+# ── US-817: web adapter best-effort ────────────────────────────────────────
+def test_html_to_text_strips_markup():
+    html = (
+        "<html><head><style>.x{color:red}</style><script>var a=1;</script></head>"
+        "<body><h1>Từ lóng 2026</h1><p>gét gô nghĩa là <b>đi thôi</b></p></body></html>"
+    )
+    text = slang_trend._html_to_text(html)
+    assert "Từ lóng 2026" in text and "gét gô" in text
+    assert "color:red" not in text and "var a=1" not in text
+
+
+def test_robots_disallow_skips_source_without_fetch(tmp_db, monkeypatch):
+    db.set_setting("slang_sources", "http://x.test/a")
+    monkeypatch.setattr(slang_trend, "_robots_ok", lambda url: False)
+    monkeypatch.setattr(
+        slang_trend, "_fetch_page",
+        lambda url: pytest.fail("robots cấm thì không được fetch"),
+    )
+    assert slang_trend.web_digest() == ([], 0, 0, 1)
+
+
+def test_fetch_page_returns_none_on_error_or_non200(monkeypatch):
+    def boom(url, **kw):
+        raise OSError("timeout")
+
+    monkeypatch.setattr(slang_trend.httpx, "get", boom)
+    assert slang_trend._fetch_page("http://x.test/a") is None
+
+    class _Resp:
+        status_code = 403
+        text = "bị chặn"
+
+    monkeypatch.setattr(slang_trend.httpx, "get", lambda url, **kw: _Resp())
+    assert slang_trend._fetch_page("http://x.test/a") is None
+
+
+def test_web_digest_feeds_shared_extraction(tmp_db, monkeypatch):
+    db.set_setting("slang_sources", "http://x.test/ok http://y.test/die")
+    monkeypatch.setattr(slang_trend, "_robots_ok", lambda url: True)
+    monkeypatch.setattr(
+        slang_trend, "_fetch_page",
+        lambda url: "bài viết về slang" if "x.test" in url else None,
+    )
+    _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    pairs, skipped, ok, failed = slang_trend.web_digest()
+    assert pairs == [(e["wrong"], e["right"]) for e in _GOOD]
+    assert (skipped, ok, failed) == (0, 1, 1)
+
+
+def test_run_trend_update_web_survives_llm_down(tmp_db, monkeypatch):
+    # LLM digest rớt nhưng nguồn web sống → vẫn nhập được pending (best-effort).
+    db.set_setting("slang_sources", "http://x.test/ok")
+    monkeypatch.setattr(slang_trend, "_robots_ok", lambda url: True)
+    monkeypatch.setattr(slang_trend, "_fetch_page", lambda url: "bài viết")
+
+    def picky(system, user, timeout=0):
+        if "bài viết" in user:
+            return json.dumps(_GOOD, ensure_ascii=False)
+        raise RuntimeError("digest trực tiếp rớt")
+
+    monkeypatch.setattr(correct, "chat_once", picky)
+    res = run_trend_update()
+    assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 1)
+    assert len(db.list_corrections(source="trend", status="pending")) == 2

@@ -85,6 +85,7 @@ async function loadServerSettings(){
     const lex = s.lexicon || {};
     for (const [id, key] of Object.entries(LEX_IDS)) $(id).checked = !!lex[key];
     if (document.activeElement !== $("lexUrl")) $("lexUrl").value = lex.url || "";
+    if (document.activeElement !== $("slangSources")) $("slangSources").value = s.slang_sources || "";
     syncLexBtn();
   } catch { $("engineVal").textContent = "—"; }
 }
@@ -706,7 +707,15 @@ async function putLexiconUrl(url){
     if (!r.ok) throw new Error(r.statusText);
   } catch (e) { console.warn("Chưa sync URL thư viện lên server:", e.message); }
 }
-// ── US-816: LLM tổng hợp tiếng lóng MXH đang hot → pending chờ duyệt ───────
+// ── US-816/817: LLM + trang web public tổng hợp tiếng lóng → pending duyệt ─
+$("slangSources").addEventListener("change", async () => {
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slang_sources: $("slangSources").value.trim() }),
+    });
+  } catch (e) { console.warn("Chưa sync nguồn trend lên server:", e.message); }
+});
 $("slangTrend").onclick = async () => {
   const btn = $("slangTrend");
   btn.disabled = true;

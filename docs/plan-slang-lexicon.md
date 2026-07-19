@@ -1,6 +1,6 @@
 # Plan: Slang/Teencode Lexicon (mở rộng FR-6)
 - **Source**: US-815..817 (FR-6 Correction Library mở rộng — PRD stub cập nhật kèm plan này)
-- **Status**: In-Progress
+- **Status**: Implemented
 - **Updated**: 2026-07-20
 
 ## Approach
@@ -25,8 +25,8 @@ Ranking: sửa tối thiểu `_rank_rows`/`top_pairs` — khi có `regions`, tag
 | T-109 | `POST /api/lexicon/slang-trend` (503 thiếu key, 502 mọi nguồn fail, trả counts) | US-816 | → T-108 | app/main.py | [x] |
 | T-110 | Nút "Cập nhật tiếng lóng" + badge pending + nguồn `trend` trong filter/label UI | US-816 | → T-109 | app/static/index.html, app/static/app.js | [x] |
 | T-111 | Tests US-816 (parse garbage, import pending, 503, pending không vào bias) | US-816 | → T-109 | tests/test_slang_trend.py | [x] |
-| T-112 | Web adapter: `_robots_ok` (robotparser), `_fetch_page` (httpx, UA riêng, fail→None), `_html_to_text` (stdlib HTMLParser), `web_digest` + setting `slang_sources`; wire vào `run_trend_update` | US-817 | → T-108 | app/slang_trend.py, app/main.py | [ ] |
-| T-113 | Tests US-817 (robots deny skip, fetch fail skip, html→text, partial failure) | US-817 | → T-112 | tests/test_slang_trend.py | [ ] |
+| T-112 | Web adapter: `_robots_ok` (robotparser), `_fetch_page` (httpx, UA riêng, fail→None), `_html_to_text` (stdlib HTMLParser), `web_digest` + setting `slang_sources`; wire vào `run_trend_update` | US-817 | → T-108 | app/slang_trend.py, app/main.py | [x] |
+| T-113 | Tests US-817 (robots deny skip, fetch fail skip, html→text, partial failure) | US-817 | → T-112 | tests/test_slang_trend.py | [x] |
 
 ## Stacked PRs (≤400 LOC mỗi PR)
 - **PR 1** = T-101..106 (US-815) — điểm tích hợp user-visible đầu tiên (toggle dùng được ngay).

@@ -108,6 +108,8 @@ class SettingsIn(BaseModel):
     # US-815: seed slang/teencode MXH — mặc định tắt (họp trang trọng không nhiễm slang)
     lexicon_slang: bool | None = None
     lexicon_url: str | None = None
+    # US-817: URL trang public tổng hợp trend (cách nhau khoảng trắng) — rỗng dùng mặc định
+    slang_sources: str | None = None
     # Toggle bổ trợ live: đánh dấu từ nghi sai + khử nhiễu đầu vào ("0"/"1")
     flag_words: bool | None = None
     denoise_enabled: bool | None = None
@@ -146,6 +148,7 @@ def api_settings():
             "models_present": diarize.models_present(),
         },
         "lexicon": _lexicon_settings(),
+        "slang_sources": db.get_setting("slang_sources", "") or "",
         "flag_words": db.get_setting("flag_words", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
     }
@@ -174,6 +177,8 @@ def api_settings_put(body: SettingsIn):
             corrections.remove_seed(region)
     if body.lexicon_url is not None:
         db.set_setting("lexicon_url", body.lexicon_url.strip())
+    if body.slang_sources is not None:
+        db.set_setting("slang_sources", body.slang_sources.strip())
     if body.flag_words is not None:
         db.set_setting("flag_words", "1" if body.flag_words else "0")
     if body.denoise_enabled is not None:
