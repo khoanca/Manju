@@ -1,0 +1,138 @@
+"""US-816: LLM trend digest slang → nhập pending chờ duyệt
++ US-817: web adapter best-effort — mock toàn bộ boundary mạng/LLM."""
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import correct, db, slang_trend, transcribe
+from app.corrections import build_bias
+from app.slang_trend import _parse_entries, run_trend_update
+
+
+@pytest.fixture
+def tmp_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DATA", tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    monkeypatch.setattr(db, "DEFAULT_RECORDINGS", tmp_path / "rec")
+    monkeypatch.setattr(transcribe, "TRANSCRIPTS", tmp_path / "tx")
+    (tmp_path / "tx").mkdir()
+    (tmp_path / "rec").mkdir()
+    db.init()
+    return tmp_path
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DATA", tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    monkeypatch.setattr(db, "DEFAULT_RECORDINGS", tmp_path / "rec")
+    monkeypatch.setattr(transcribe, "TRANSCRIPTS", tmp_path / "tx")
+    monkeypatch.setattr(transcribe, "RECORDINGS", tmp_path / "rec")
+    (tmp_path / "tx").mkdir()
+    (tmp_path / "rec").mkdir()
+    from app.main import app
+    with TestClient(app) as c:
+        yield c
+
+
+_GOOD = [
+    {"wrong": "ghét gô mới", "right": "gét gô mới"},
+    {"wrong": "phờ lếch xxx", "right": "flex xxx"},
+]
+
+
+def _mock_llm(monkeypatch, payload: str):
+    monkeypatch.setattr(correct, "chat_once", lambda system, user, timeout=0: payload)
+
+
+# ── _parse_entries: validate lỏng, skip-not-raise ──────────────────────────
+def test_parse_entries_skips_garbage():
+    data = _GOOD + [
+        {"wrong": "", "right": "x"},                      # rỗng
+        {"wrong": "trùng hoa thường", "right": "TRÙNG HOA THƯỜNG"},  # chỉ khác case
+        {"wrong": "một hai ba bốn năm", "right": "x"},    # >4 từ
+        {"right": "thiếu wrong"},                          # thiếu key
+        "không phải dict",
+        {"wrong": "ghét gô mới", "right": "khác"},        # trùng wrong trong batch
+    ]
+    rows, skipped = _parse_entries(json.dumps(data, ensure_ascii=False))
+    assert rows == [(e["wrong"], e["right"]) for e in _GOOD]
+    assert skipped == 6
+
+
+def test_parse_entries_raises_on_bad_payload():
+    with pytest.raises(ValueError):
+        _parse_entries("LLM trả văn xuôi, không phải JSON")
+    with pytest.raises(ValueError):
+        _parse_entries('{"wrong": "không phải", "right": "danh sách"}')
+
+
+def test_parse_entries_caps_max_entries():
+    data = [{"wrong": f"sai {i} x", "right": f"đúng {i} x"} for i in range(50)]
+    rows, skipped = _parse_entries(json.dumps(data, ensure_ascii=False))
+    assert len(rows) == slang_trend.MAX_ENTRIES
+    assert skipped == 50 - slang_trend.MAX_ENTRIES
+
+
+# ── run_trend_update: nhập pending, never-fail theo nguồn ──────────────────
+def test_run_trend_update_imports_pending(tmp_db, monkeypatch):
+    _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    res = run_trend_update()
+    assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 0)
+    rows = db.list_corrections(source="trend")
+    assert {(r["tag"], r["status"]) for r in rows} == {("slang", "pending")}
+    # Bấm lại: cặp đã có → INSERT OR IGNORE, đếm vào skipped
+    res2 = run_trend_update()
+    assert res2.new_pending == 0
+    assert res2.skipped == 2
+
+
+def test_run_trend_update_llm_down_returns_zero_sources(tmp_db, monkeypatch):
+    def boom(system, user, timeout=0):
+        raise RuntimeError("mạng rớt")
+
+    monkeypatch.setattr(correct, "chat_once", boom)
+    res = run_trend_update()
+    assert (res.sources_ok, res.sources_skipped, res.new_pending) == (0, 1, 0)
+    assert db.list_corrections(source="trend") == []
+
+
+def test_pending_trend_excluded_from_bias_until_approved(tmp_db, monkeypatch):
+    _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    run_trend_update()
+    assert "gét gô mới" not in build_bias("")
+    row = next(r for r in db.list_corrections(source="trend") if r["right"] == "gét gô mới")
+    db.set_correction_status(row["id"], "approved")
+    assert "gét gô mới" in build_bias("")
+
+
+# ── POST /api/lexicon/slang-trend ──────────────────────────────────────────
+def test_endpoint_503_without_key(client, monkeypatch):
+    monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "")
+    r = client.post("/api/lexicon/slang-trend")
+    assert r.status_code == 503
+    assert client.get("/api/corrections").json() == []
+
+
+def test_endpoint_502_when_all_sources_fail(client, monkeypatch):
+    monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "k")
+
+    def boom(system, user, timeout=0):
+        raise RuntimeError("mạng rớt")
+
+    monkeypatch.setattr(correct, "chat_once", boom)
+    assert client.post("/api/lexicon/slang-trend").status_code == 502
+
+
+def test_endpoint_imports_and_returns_counts(client, monkeypatch):
+    monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "k")
+    _mock_llm(monkeypatch, json.dumps(_GOOD + [{"wrong": "x", "right": "x"}], ensure_ascii=False))
+    r = client.post("/api/lexicon/slang-trend")
+    assert r.status_code == 200
+    d = r.json()
+    assert (d["new_pending"], d["skipped"], d["sources_ok"]) == (2, 1, 1)
+    rows = client.get("/api/corrections", params={"status": "pending", "source": "trend"}).json()
+    assert len(rows) == 2

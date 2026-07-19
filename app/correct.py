@@ -162,6 +162,18 @@ def _chat_openrouter(client: httpx.Client, system: str, user: str, opts: LlmOpts
     return _clean_output(resp.json()["choices"][0]["message"]["content"])
 
 
+def chat_once(system: str, user: str, timeout: float = TIMEOUT_S) -> str:
+    """1 lượt chat OpenRouter cho tác vụ ngoài pass 2 (US-816 trend digest).
+
+    KHÔNG fallback Ollama — tác vụ cần kiến thức trend/thế giới mà model 4B
+    local không có. Lỗi mạng/API raise cho caller xử lý (khác contract
+    never-fail của pass 2); caller phải check `openrouter_enabled()` trước.
+    """
+    opts = LlmOpts(timeout=timeout)
+    with httpx.Client() as client:
+        return _chat_openrouter(client, system, user, opts)
+
+
 def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:
     # US-805: Ollama cũng nhận context như OpenRouter — cùng 1 chỗ build prompt.
     user = _prompt_for(chunk, opts.glossary, opts.context, opts.pairs, opts.uncertain)

@@ -590,7 +590,7 @@ async function deleteSpeaker(id, name){
 }
 
 // ── US-802: Thư viện từ — cặp sửa lỗi (Settings, load lười khi mở mục) ─────
-const CORR_SRC = { user: "Bạn sửa", seed: "Có sẵn", remote: "Tải về" };
+const CORR_SRC = { user: "Bạn sửa", seed: "Có sẵn", remote: "Tải về", trend: "Xu hướng" };
 const CORR_ST = { pending: "Chờ duyệt", approved: "Đã duyệt", rejected: "Đã loại" };
 const CORR_TAG_SUGS = ["bắc", "trung", "nam", "en"];
 let corrFetched = false;   // chỉ fetch lần đầu mở mục, không fetch lúc khởi động
@@ -599,6 +599,7 @@ $("corrToggle").onclick = () => {
   const open = !$("corrBody").classList.toggle("hidden");
   $("corrChevron").textContent = open ? "▾" : "▸";
   if (open && !corrFetched){ corrFetched = true; loadCorrections(); }
+  if (open) refreshSlangBadge();
 };
 ["corrStatus", "corrSource", "corrTagFilter"].forEach(id => $(id).addEventListener("change", loadCorrections));
 $("corrTagFilter").addEventListener("keydown", e => { if (e.key === "Enter") loadCorrections(); });
@@ -615,6 +616,7 @@ async function loadCorrections(){
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     renderCorrections(await r.json());
   } catch (e) { alert("Lỗi tải thư viện từ: " + e.message); }
+  refreshSlangBadge();  // duyệt/loại/xoá đều đi qua đây → badge luôn tươi
 }
 function renderCorrections(arr){
   const box = $("corrList");
@@ -704,6 +706,30 @@ async function putLexiconUrl(url){
     if (!r.ok) throw new Error(r.statusText);
   } catch (e) { console.warn("Chưa sync URL thư viện lên server:", e.message); }
 }
+// ── US-816: LLM tổng hợp tiếng lóng MXH đang hot → pending chờ duyệt ───────
+$("slangTrend").onclick = async () => {
+  const btn = $("slangTrend");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/lexicon/slang-trend", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    alert(`Đã thêm ${d.new_pending} cặp tiếng lóng chờ duyệt (bỏ qua ${d.skipped}).`);
+    // Nhảy thẳng vào flow duyệt: lọc sẵn pending + nguồn Xu hướng
+    $("corrStatus").value = "pending"; $("corrSource").value = "trend";
+    loadCorrections();
+  } catch (e) { alert("Lỗi cập nhật tiếng lóng: " + e.message); }
+  btn.disabled = false;
+};
+async function refreshSlangBadge(){
+  try {
+    const rows = await (await fetch("/api/corrections?status=pending&source=trend")).json();
+    const b = $("slangPendingBadge");
+    b.classList.toggle("hidden", !rows.length);
+    b.textContent = rows.length ? `${rows.length} chờ duyệt` : "";
+  } catch { /* badge chỉ là trang trí — lỗi thì thôi */ }
+}
+
 $("lexUpdate").onclick = async () => {
   await putLexiconUrl($("lexUrl").value.trim());  // chốt URL trước khi gọi update
   try {

@@ -20,11 +20,11 @@ Ranking: sửa tối thiểu `_rank_rows`/`top_pairs` — khi có `regions`, tag
 | T-104 | `lexicon_slang` vào SettingsIn + `_LEXICON_REGIONS` | US-815 | → T-103 | app/main.py | [x] |
 | T-105 | Checkbox "Tiếng lóng/GenZ" + `LEX_IDS.lexSlang` | US-815 | → T-104 | app/static/index.html, app/static/app.js | [x] |
 | T-106 | Tests US-815 (schema slang.json, import/toggle, ranking 2 chiều, cập nhật assert settings) | US-815 | → T-102,T-104 | tests/test_corrections.py | [x] |
-| T-107 | `chat_once(system, user, timeout)` public trong correct.py (OpenRouter-only, raise khi lỗi) | US-816 | ‖ | app/correct.py | [ ] |
-| T-108 | `app/slang_trend.py`: prompt trích xuất, `_parse_entries` (validate lỏng, skip-not-raise), `llm_digest`, `run_trend_update` → import pending | US-816 | → T-107 | app/slang_trend.py | [ ] |
-| T-109 | `POST /api/lexicon/slang-trend` (503 thiếu key, 502 mọi nguồn fail, trả counts) | US-816 | → T-108 | app/main.py | [ ] |
-| T-110 | Nút "Cập nhật tiếng lóng" + badge pending + nguồn `trend` trong filter/label UI | US-816 | → T-109 | app/static/index.html, app/static/app.js | [ ] |
-| T-111 | Tests US-816 (parse garbage, import pending, 503, pending không vào bias) | US-816 | → T-109 | tests/test_slang_trend.py | [ ] |
+| T-107 | `chat_once(system, user, timeout)` public trong correct.py (OpenRouter-only, raise khi lỗi) | US-816 | ‖ | app/correct.py | [x] |
+| T-108 | `app/slang_trend.py`: prompt trích xuất, `_parse_entries` (validate lỏng, skip-not-raise), `llm_digest`, `run_trend_update` → import pending | US-816 | → T-107 | app/slang_trend.py | [x] |
+| T-109 | `POST /api/lexicon/slang-trend` (503 thiếu key, 502 mọi nguồn fail, trả counts) | US-816 | → T-108 | app/main.py | [x] |
+| T-110 | Nút "Cập nhật tiếng lóng" + badge pending + nguồn `trend` trong filter/label UI | US-816 | → T-109 | app/static/index.html, app/static/app.js | [x] |
+| T-111 | Tests US-816 (parse garbage, import pending, 503, pending không vào bias) | US-816 | → T-109 | tests/test_slang_trend.py | [x] |
 | T-112 | Web adapter: `_robots_ok` (robotparser), `_fetch_page` (httpx, UA riêng, fail→None), `_html_to_text` (stdlib HTMLParser), `web_digest` + setting `slang_sources`; wire vào `run_trend_update` | US-817 | → T-108 | app/slang_trend.py, app/main.py | [ ] |
 | T-113 | Tests US-817 (robots deny skip, fetch fail skip, html→text, partial failure) | US-817 | → T-112 | tests/test_slang_trend.py | [ ] |
 

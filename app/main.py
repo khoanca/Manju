@@ -12,7 +12,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import corrections, db, diarize, engines, live, org, subtitle, transcribe
+from app import (
+    correct,
+    corrections,
+    db,
+    diarize,
+    engines,
+    live,
+    org,
+    slang_trend,
+    subtitle,
+    transcribe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -427,6 +438,26 @@ def api_lexicon_update():
     except corrections.LexiconError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"ok": True, "imported": corrections.import_remote(entries)}
+
+
+@app.post("/api/lexicon/slang-trend")
+def api_slang_trend():
+    """US-816: LLM tổng hợp slang MXH đang hot → nhập pending (tag 'slang',
+    source 'trend') chờ user duyệt — không tự vào bias ASR/pass 2."""
+    if not correct.openrouter_enabled():
+        raise HTTPException(
+            503, "Chưa cấu hình OPENROUTER_API_KEY — tổng hợp trend cần LLM cloud"
+        )
+    res = slang_trend.run_trend_update()
+    if res.sources_ok == 0:
+        raise HTTPException(502, "Không lấy được dữ liệu xu hướng từ nguồn nào")
+    return {
+        "ok": True,
+        "new_pending": res.new_pending,
+        "skipped": res.skipped,
+        "sources_ok": res.sources_ok,
+        "sources_skipped": res.sources_skipped,
+    }
 
 
 # ── Đợt 2: đẩy TEXT bản ghi lên org cloud (không audio) ────────────────────
