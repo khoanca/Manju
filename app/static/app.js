@@ -677,7 +677,7 @@ async function deleteCorrection(c){
   loadCorrections();
 }
 // ── US-804: seed lexicon vùng miền + cập nhật online (opt-in) ──────────────
-const LEX_IDS = { lexBac: "bac", lexTrung: "trung", lexNam: "nam", lexEn: "en" };
+const LEX_IDS = { lexBac: "bac", lexTrung: "trung", lexNam: "nam", lexEn: "en", lexSlang: "slang" };
 Object.entries(LEX_IDS).forEach(([id, key]) => $(id).addEventListener("change", async () => {
   try {
     const r = await fetch("/api/settings", {

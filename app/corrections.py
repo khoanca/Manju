@@ -90,12 +90,25 @@ def _add_personal(out: str, seen: set[str], personal: Sequence[str]) -> str:
     return out
 
 
+# Tag của entry slang/teencode (US-815) — không phải vùng miền: khi lọc theo
+# vùng đang active, slang được coi là "khớp mọi vùng" (region-neutral), nếu
+# không seed vùng (372-586 ký tự/vùng) sẽ chèn hết cap 800 trước khi tới slang.
+SLANG_TAG = "slang"
+
+
+def _eligible_tags(regions: Collection[str]) -> frozenset[str]:
+    """Tag xếp tier ưu tiên khi có vùng active; regions=() → rỗng như cũ
+    (mọi tag đồng hạng, slang KHÔNG được nhảy lên trên cặp user count cao)."""
+    return frozenset({*regions, SLANG_TAG}) if regions else frozenset()
+
+
 def _rank_rows(rows: list[dict], topic: str, regions: Collection[str]) -> list[dict]:
-    """Stable sort: tag khớp vùng miền trước, rồi term xuất hiện trong topic;
-    còn lại giữ nguyên thứ tự count DESC/updated_at DESC từ DB."""
+    """Stable sort: tag khớp vùng miền (slang tính là khớp) trước, rồi term
+    xuất hiện trong topic; còn lại giữ nguyên count DESC/updated_at DESC từ DB."""
     topic_cf = topic.casefold()
+    eligible = _eligible_tags(regions)
     return sorted(rows, key=lambda r: (
-        r["tag"] not in regions,
+        r["tag"] not in eligible,
         not (topic_cf and r["right"].strip().casefold() in topic_cf),
     ))
 
@@ -139,7 +152,8 @@ def top_pairs(limit: int = 20, regions: Collection[str] = ()) -> list[tuple[str,
         rows = db.list_corrections(status="approved")
     except Exception:  # noqa: BLE001
         return []
-    ranked = sorted(rows, key=lambda r: r["tag"] not in regions)
+    eligible = _eligible_tags(regions)
+    ranked = sorted(rows, key=lambda r: r["tag"] not in eligible)
     return [(r["wrong"], r["right"]) for r in ranked[:limit]]
 
 
@@ -209,9 +223,9 @@ def mine_speaker_terms(transcript_id: str) -> int:
         return 0
 
 
-# ── Seed lexicon vùng miền + cập nhật remote opt-in (US-804) ───────────────
+# ── Seed lexicon vùng miền + slang + cập nhật remote opt-in (US-804/815) ───
 LEXICON_DIR = Path(__file__).resolve().parent / "data" / "lexicon"
-SEED_REGIONS = ("bac", "trung", "nam", "en_accent")
+SEED_REGIONS = ("bac", "trung", "nam", "en_accent", SLANG_TAG)
 FETCH_TIMEOUT_S = 15.0
 
 

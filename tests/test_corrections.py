@@ -608,7 +608,57 @@ def test_settings_get_returns_lexicon_state(client, monkeypatch):
         lambda: SimpleNamespace(info=SimpleNamespace(tier="mlx", model_name="m")),
     )
     s = client.get("/api/settings").json()
-    assert s["lexicon"] == {"bac": False, "trung": False, "nam": False, "en": False, "url": ""}
+    assert s["lexicon"] == {
+        "bac": False, "trung": False, "nam": False, "en": False,
+        "slang": False, "url": "",
+    }
+
+
+# ── Seed slang/teencode MXH (US-815) ───────────────────────────────────────
+def test_import_seed_slang_idempotent(tmp_db):
+    n1 = import_seed("slang")
+    assert n1 == len(_lexicon_entries("slang"))
+    assert import_seed("slang") == 0
+    rows = db.list_corrections(source="seed", tag="slang")
+    assert {(r["status"], r["count"]) for r in rows} == {("approved", 1)}
+
+
+def test_settings_toggle_slang_imports_and_removes(client):
+    db.upsert_correction("sai user", "đúng user")
+    r = client.put("/api/settings", json={"lexicon_slang": True})
+    assert r.status_code == 200
+    assert r.json()["lexicon"]["slang"] is True
+    assert len(client.get("/api/corrections",
+                          params={"source": "seed", "tag": "slang"}).json()) > 0
+
+    r = client.put("/api/settings", json={"lexicon_slang": False})
+    assert r.json()["lexicon"]["slang"] is False
+    assert client.get("/api/corrections", params={"source": "seed", "tag": "slang"}).json() == []
+    # Entry user không bị toggle slang đụng tới
+    assert len(client.get("/api/corrections", params={"source": "user"}).json()) == 1
+
+
+def test_rank_slang_shares_tier_with_active_regions(tmp_db):
+    # Không vùng nào active thì slang KHÔNG được ưu tiên; có vùng active thì
+    # slang đứng cùng tier với vùng, trên entry không tag (US-815).
+    db.add_corrections_ignore([("nàm x", "làm x", "bac")], source="seed")
+    db.add_corrections_ignore([("ghét gô x", "gét gô x", "slang")], source="seed")
+    db.add_corrections_ignore([("sai chung", "đúng chung", "")], source="seed")
+    bias = build_bias("", regions=("bac",))
+    assert bias.index("gét gô x") < bias.index("đúng chung")
+    assert bias.index("làm x") < bias.index("đúng chung")
+    pairs = top_pairs(2, regions=("bac",))
+    assert set(pairs) == {("nàm x", "làm x"), ("ghét gô x", "gét gô x")}
+
+
+def test_rank_slang_neutral_without_regions(tmp_db):
+    # regions=() → hành vi cũ giữ nguyên: cặp user count cao vẫn đứng trước slang.
+    db.add_corrections_ignore([("ghét gô x", "gét gô x", "slang")], source="seed")
+    for _ in range(3):
+        db.upsert_correction("cu bơ nét", "Kubernetes")  # count 3 → approved
+    bias = build_bias("")
+    assert bias.index("Kubernetes") < bias.index("gét gô x")
+    assert top_pairs(1) == [("cu bơ nét", "Kubernetes")]
 
 
 # ── Cập nhật lexicon online opt-in (T-013, US-804 AC2) ─────────────────────

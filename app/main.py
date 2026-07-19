@@ -94,6 +94,8 @@ class SettingsIn(BaseModel):
     lexicon_trung: bool | None = None
     lexicon_nam: bool | None = None
     lexicon_en: bool | None = None
+    # US-815: seed slang/teencode MXH — mặc định tắt (họp trang trọng không nhiễm slang)
+    lexicon_slang: bool | None = None
     lexicon_url: str | None = None
     # Toggle bổ trợ live: đánh dấu từ nghi sai + khử nhiễu đầu vào ("0"/"1")
     flag_words: bool | None = None
@@ -106,6 +108,7 @@ _LEXICON_REGIONS = {
     "lexicon_trung": "trung",
     "lexicon_nam": "nam",
     "lexicon_en": "en_accent",
+    "lexicon_slang": "slang",
 }
 
 
