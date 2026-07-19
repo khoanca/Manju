@@ -59,6 +59,7 @@ Hệ thống theo mô hình **local-first + org sync**:
 ### FR-6 — Correction Library: sửa transcript + thư viện tự học (net-new 2026-07-15)
 - User sửa transcript (bản máy giữ nguyên); app trích cặp (sai → đúng) vào thư viện có duyệt, tự mồi vào ASR + pass 2 các lần sau. Seed lexicon từ địa phương Bắc/Trung/Nam + accent Anh, cập nhật online opt-in. Rolling context cho live subtitle.
 - Không fine-tune model (local-first, không GPU/training). Chi tiết US-801..805, AC, task: `docs/plan-correction-library.md`.
+- Mở rộng slang/teencode MXH (net-new 2026-07-20): US-815 seed slang nói tự soạn (`tag='slang'`, toggle mặc định tắt, ranking region-neutral); US-816 LLM (OpenRouter) tổng hợp slang đang hot → nhập `pending` chờ duyệt; US-817 đọc trang web public tổng hợp trend (robots.txt, không né anti-bot; TikTok/FB/X trực tiếp ngoài phạm vi — API đóng). Chi tiết: `docs/plan-slang-lexicon.md`.
 
 ### FR-7 — Live Intelligence: bias thông minh cho subtitle trực tiếp (net-new 2026-07-20)
 - US-806 — Topic-bias: topic (US-805) xếp lại lexicon + tiêm vào Whisper initial_prompt, refresh glossary giữa phiên.
