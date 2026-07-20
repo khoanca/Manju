@@ -522,9 +522,9 @@ def test_live_session_snapshots_bias_at_start(tmp_db, monkeypatch):
         ws=None, loop=None, cfg={"glossary": "MyTerm", "store_audio": False}
     )
     # Library chốt lúc start phiên: vào cả spec ASR lẫn pairs pass 2.
-    # Prompt ASR xếp user CUỐI (US-806: Whisper cắt đầu, giữ đuôi khi tràn);
-    # bản cho pass 2 (session.glossary) vẫn user-first như cũ.
-    assert session.spec.glossary == "Kubernetes, MyTerm"
+    # ASR và pass 2 dùng CÙNG chuỗi term user-first (hotfix 2026-07-20: bỏ
+    # tiêm topic + bỏ đảo thứ tự — prompt văn xuôi bị Whisper nhại vào subtitle).
+    assert session.spec.glossary == "MyTerm, Kubernetes"
     assert session.glossary == "MyTerm, Kubernetes"
     assert session.pairs == (("cu bơ nét", "Kubernetes"),)
 

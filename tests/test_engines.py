@@ -73,6 +73,19 @@ def test_keep_segment_keeps_real_speech():
     assert engines.keep_segment("triển khai Kubernetes", 0.1, -0.3) is True
 
 
+def test_keep_segment_drops_token_loop_hallucination():
+    # Bug thực địa 2026-07-20: Whisper loop 1 token ngắn khi im lặng.
+    assert engines.keep_segment("J. J. J.", 0.1, -0.2) is False
+    assert engines.keep_segment("ừ ừ ừ ừ", 0.1, -0.2) is False
+    assert engines.keep_segment("ok ok ok ok ok", 0.1, -0.2) is False
+
+
+def test_keep_segment_keeps_short_real_phrases():
+    assert engines.keep_segment("ừ ừ", 0.1, -0.2) is True  # 2 lần chưa coi là loop
+    assert engines.keep_segment("đúng rồi đúng rồi đúng rồi", 0.1, -0.2) is True  # 2 từ xen kẽ
+    assert engines.keep_segment("không không không được đâu", 0.1, -0.2) is True
+
+
 def test_cpu_model_sizes_scales_with_hardware(monkeypatch):
     monkeypatch.setattr(engines, "_ram_gb", lambda: 32.0)
     monkeypatch.setattr(engines.os, "cpu_count", lambda: 12)

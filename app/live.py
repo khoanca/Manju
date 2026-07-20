@@ -47,7 +47,6 @@ CONTEXT_RECENT_K = 6  # số câu final gần nhất giữ làm ngữ cảnh pas
 CONTEXT_CONDENSE_EVERY = 8  # đủ chừng này câu mới thì condense topic 1 lần
 CONTEXT_TOPIC_NUM_CTX = 2048  # condense chỉ tóm vài câu → ctx nhỏ
 CONTEXT_TOPIC_TIMEOUT_S = 20.0  # condense chạy nền nhưng không để treo lâu
-TOPIC_PROMPT_CHARS = 160  # topic cắt ngắn khi tiêm vào initial_prompt (US-806)
 # US-811: final min avg_logprob dưới ngưỡng → re-decode nền setting mạnh hơn.
 # −1.0 là sàn hallucination (keep_segment); −0.6 bắt câu "giữ lại nhưng run".
 REVISE_LOGPROB = -0.6
@@ -231,27 +230,20 @@ class LiveSession:
             override = None
             self.model_name = self.engine.info.model_name
         self._model_override = override
-        self.spec = self._make_spec(self.glossary, self.initial_topic)
+        self.spec = self._make_spec(self.glossary)
 
-    def _make_spec(self, gloss: str, topic: str) -> engines.DecodeSpec:
+    def _make_spec(self, gloss: str) -> engines.DecodeSpec:
+        # initial_prompt CHỈ là danh sách term (user-first). TUYỆT ĐỐI không
+        # tiêm văn xuôi ("Chủ đề: ..."): Whisper nhại prompt văn xuôi vào
+        # subtitle khi im lặng/nhiễu (bug thực địa 2026-07-20 — "chủ đề",
+        # "J. J. J."). Topic chỉ dùng để XẾP HẠNG term trong build_bias.
         return engines.DecodeSpec(
-            self.language, self._asr_prompt(gloss, topic), self._model_override,
-            flag_words=self.flag_words,
+            self.language, gloss, self._model_override, flag_words=self.flag_words,
         )
 
-    def _asr_prompt(self, gloss: str, topic: str) -> str:
-        """initial_prompt cho Whisper. Quá 224 token Whisper cắt phần ĐẦU (giữ
-        đuôi) → xếp ít quan trọng trước: topic (được phép rơi) → term thư viện/
-        cá nhân → glossary user cuối (bảo toàn tuyệt đối)."""
-        user = self.user_glossary
-        rest = gloss[len(user):].strip(" ,") if user and gloss.startswith(user) else gloss
-        tail = ", ".join(p for p in (rest, user) if p)
-        if not topic:
-            return tail
-        return f"Chủ đề: {topic[:TOPIC_PROMPT_CHARS]}. {tail}".strip()
-
     def _refresh_bias(self, topic: str) -> None:
-        """Rebuild bias khi topic đổi (US-806) / đổi người nói (US-814).
+        """Rebuild bias khi topic đổi (US-806) / đổi người nói (US-814):
+        topic chỉ re-rank term thư viện, không vào prompt.
 
         Gán attribute là atomic (GIL) + DecodeSpec frozen → decode/pass-2 luôn
         thấy spec cũ hoặc mới trọn vẹn, không cần lock; lỗi → giữ nguyên."""
@@ -260,7 +252,7 @@ class LiveSession:
                 self.user_glossary, personal=self._personal_now, topic=topic,
                 regions=self._regions,
             )
-            spec = self._make_spec(gloss, topic)
+            spec = self._make_spec(gloss)
             self.glossary = gloss
             self.spec = spec
         except Exception:  # noqa: BLE001 — never-fail, giữ bias cũ

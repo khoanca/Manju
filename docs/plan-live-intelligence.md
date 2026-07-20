@@ -6,14 +6,14 @@
 ## Kiến trúc chung
 
 - Bias ASR = `corrections.build_bias(user_glossary, personal, topic, regions)` (user → personal cap 240 → library xếp theo region > topic-overlap > count; tổng cap 800 ký tự ≈ 224 token).
-- Prompt ASR xếp NGƯỢC độ quan trọng (Whisper cắt đầu, giữ đuôi): `Chủ đề: {topic:160}. {library/personal}, {user glossary}` (`LiveSession._asr_prompt`).
+- Prompt ASR = chính chuỗi build_bias (danh sách term, user-first). ~~Tiêm "Chủ đề: X."~~ — GỠ BỎ (hotfix 2026-07-20): Whisper echo văn xuôi của initial_prompt vào subtitle khi im lặng/nhiễu; mọi bias dạng câu đều cấm, chỉ term list. Kèm guard `_is_token_loop` trong keep_segment chặn hallucination lặp token.
 - Refresh giữa phiên: `ContextTracker.on_topic` → `LiveSession._refresh_bias` swap `self.glossary` + `self.spec` (DecodeSpec frozen, gán attribute atomic dưới GIL — không lock).
 
 ## US → cơ chế → file
 
 | US | Cơ chế | File chính |
 |---|---|---|
-| US-806 Topic-bias | topic condense (US-805) → re-rank lexicon (keyword overlap, không LLM/embedding thêm) + tiêm topic vào initial_prompt + refresh spec | corrections.py, live.py |
+| US-806 Topic-bias | topic condense (US-805) → re-rank lexicon (keyword overlap, không LLM/embedding thêm) + refresh spec giữa phiên. **HOTFIX 2026-07-20: topic KHÔNG vào initial_prompt** — Whisper nhại prompt văn xuôi vào subtitle ("chủ đề", "J. J. J."); prompt chỉ là danh sách term user-first, topic chỉ re-rank | corrections.py, live.py |
 | US-807 Personal learn | bảng `speaker_terms(transcript_id, speaker_id, term, count)`; mine sau diarize/đặt tên cluster (heuristic: token ASCII ≥3 không dấu / khớp corrections.right / viết hoa; count≥2 hoặc known; top 30/người; delete-then-insert per transcript = idempotent) | db.py, corrections.py (`mine_speaker_terms`), main.py hooks |
 | US-808 Personal use | start card chọn người tham dự → cfg `participants` → `db.personal_terms` vào bias (sub-cap 240) + pass 2 | live.py, app.js |
 | US-809 Metadata | cfg `title`/`agenda` → `ContextTracker(initial_topic=…)` — bias từ câu đầu; title = tên transcript | live.py, app.js |
