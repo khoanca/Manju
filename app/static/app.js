@@ -308,6 +308,9 @@ function startOpfsWriter(){
 let fixedText = "", rawText = null, editedText = null, downloadName = "transcript.txt";
 let curView = "pass2";      // bản đang xem: "edited" | "pass2" | "raw"
 let baseTextAtOpen = "";    // bản hiệu lực lúc mở editor — gửi làm base_text khi PATCH (US-801)
+// US-819: bản ghi này có đang được dùng làm chuẩn đo WER không. Giữ ngoài
+// setResult (đã 7 tham số) thay vì nhồi thêm — set ở nơi có `d`.
+let goldenFlag = false;
 let lastBlobUrl = null;
 async function showAudio(id, hasServerAudio){
   const wrap = $("audioWrap"), player = $("player"), dl = $("dlAudio");
@@ -365,6 +368,7 @@ async function openDetail(m){
   setResult("Đang tải…", null, null, null, false, null, null);
   await loadSpeakers();
   const d = await (await fetch("/api/transcripts/" + m.id)).json();
+  goldenFlag = !!d.golden;
   setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map, d.edited_text);
 }
 
@@ -389,6 +393,12 @@ function applyView(){
   $("toggleRaw").textContent = "Xem " + VIEW_LABELS[next].toLowerCase();
   $("editedBadge").classList.toggle("hidden", editedText == null);
   $("delEdit").style.display = editedText != null ? "" : "none";
+  // US-819: chỉ đánh dấu chuẩn được khi đã có bản sửa tay — chuẩn phải do
+  // người soát, chấm điểm máy bằng chính output của máy là số đẹp giả.
+  $("goldenBadge").classList.toggle("hidden", !goldenFlag);
+  $("goldenBtn").style.display = editedText != null ? "" : "none";
+  $("goldenBtn").textContent = goldenFlag ? "Bỏ đánh dấu chuẩn" : "Dùng làm chuẩn đo";
+  $("editHint").style.display = curView === "raw" ? "none" : "";
   updateSaveBtn();
 }
 $("toggleRaw").onclick = () => {
@@ -408,6 +418,7 @@ $("result").addEventListener("input", updateSaveBtn);
 async function reloadDetail(){
   if (!curDetailId) return;
   const d = await (await fetch("/api/transcripts/" + curDetailId)).json();
+  goldenFlag = !!d.golden;
   setResult(d.text, d.raw_text, d.segments, d.id, !!d.audio, d.speaker_map, d.edited_text);
 }
 // PATCH bản sửa tay; 409 = bản ghi đã đổi nơi khác → báo + reload. Trả true nếu lưu OK.
@@ -446,6 +457,22 @@ $("delEdit").onclick = async () => {
       applyView();
     }
   } catch (e) { alert("Lỗi xoá bản sửa: " + e.message); }
+};
+// US-819: bật/tắt cờ dùng bản ghi làm chuẩn đo WER.
+$("goldenBtn").onclick = async () => {
+  if (!curDetailId) return;
+  const b = $("goldenBtn"); b.disabled = true;
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/golden`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ golden: !goldenFlag }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    goldenFlag = j.golden;
+    applyView();
+  } catch (e) { alert("Lỗi đánh dấu bản chuẩn: " + e.message); }
+  finally { b.disabled = false; }
 };
 
 // ── US-801: sửa từng segment inline (click vào text) ───────────────────────
