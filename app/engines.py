@@ -70,9 +70,21 @@ _HALLUCINATION_RE = re.compile(
 )
 
 
+def _is_token_loop(text: str) -> bool:
+    """Hallucination lặp token ("J. J. J.", "ừ ừ ừ ừ"): cả segment chỉ là 1 từ
+    ngắn lặp ≥3 lần. Câu thật không có dạng này — Whisper loop khi im lặng."""
+    tokens = [t.strip(".,!?…-") .casefold() for t in text.split()]
+    tokens = [t for t in tokens if t]
+    if len(tokens) < 3:
+        return False
+    return len(set(tokens)) == 1 and len(tokens[0]) <= 4
+
+
 def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
     # Ngưỡng như logic nội bộ của Whisper: no_speech cao + logprob thấp = bịa.
     if no_speech_prob > 0.6 and avg_logprob < -1.0:
+        return False
+    if _is_token_loop(text):
         return False
     return not _HALLUCINATION_RE.search(text)
 

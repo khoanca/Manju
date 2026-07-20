@@ -171,38 +171,45 @@ def test_uncertain_capped_at_max(make_session):
     assert len(uncertain) == live.UNCERTAIN_MAX
 
 
-# ── _asr_prompt + _refresh_bias (US-806/809): topic vào prompt, swap spec ──
+# ── _refresh_bias (US-806/809): topic chỉ re-rank term, KHÔNG vào prompt ──
+# Bug thực địa 2026-07-20: prompt "Chủ đề: ..." bị Whisper nhại vào subtitle
+# ("chủ đề", "J. J. J.") — spec.glossary phải là danh sách term thuần.
 
 
-def test_asr_prompt_topic_first_user_glossary_last(make_session):
-    from app import corrections
-
+def test_topic_reranks_terms_but_never_enters_prompt(make_session):
     db.upsert_correction("cu bơ nét", "Kubernetes")
     db.upsert_correction("cu bơ nét", "Kubernetes")  # count=2 → auto-approve
-    session, _, _ = make_session({"glossary": "Jira, OKR", "title": "họp hạ tầng"})
+    db.upsert_correction("gờ ra pha na", "Grafana")
+    db.upsert_correction("gờ ra pha na", "Grafana")
+    session, _, _ = make_session({"glossary": "Jira, OKR", "title": "họp về Grafana"})
 
     prompt = session.spec.glossary
-    assert prompt.startswith("Chủ đề: họp hạ tầng.")
-    assert prompt.endswith("Jira, OKR")  # glossary user cuối — Whisper giữ đuôi
-    assert "Kubernetes" in prompt
-    assert corrections.build_bias("Jira, OKR").startswith("Jira, OKR")  # pass 2 vẫn user-first
+    assert "Chủ đề" not in prompt  # văn xuôi tuyệt đối không vào prompt
+    assert prompt.startswith("Jira, OKR")  # user-first, term-list thuần
+    # Topic (title) đẩy term khớp lên trước term không khớp.
+    assert prompt.index("Grafana") < prompt.index("Kubernetes")
 
 
-def test_asr_prompt_without_topic_is_plain_bias(make_session):
-    session, _, _ = make_session({"glossary": "Jira"})
-    assert "Chủ đề" not in session.spec.glossary
-    assert session.spec.glossary.endswith("Jira")
+def test_prompt_stays_empty_when_no_terms(make_session):
+    # Thư viện + glossary rỗng, có title → prompt phải RỖNG (không còn mỗi
+    # câu "Chủ đề: ..." — chính là ca gây bug nhại prompt).
+    session, _, _ = make_session({"title": "họp sprint"})
+    assert session.spec.glossary == ""
+    session._refresh_bias("topic condense ra")
+    assert session.spec.glossary == ""
 
 
 def test_refresh_bias_swaps_spec_atomically(make_session):
+    db.upsert_correction("cu bơ nét", "Kubernetes")
+    db.upsert_correction("cu bơ nét", "Kubernetes")
     session, _, _ = make_session({"glossary": "Jira"})
     old_spec = session.spec
 
     session._refresh_bias("bàn về Kubernetes")
 
     assert session.spec is not old_spec
-    assert session.spec.glossary.startswith("Chủ đề: bàn về Kubernetes.")
-    assert "Chủ đề" not in old_spec.glossary  # object cũ không bị sửa (frozen)
+    assert "Chủ đề" not in session.spec.glossary
+    assert session.spec.glossary == session.glossary  # ASR và pass 2 cùng chuỗi
 
 
 def test_refresh_bias_error_keeps_old_spec(make_session, monkeypatch):
@@ -219,12 +226,6 @@ def test_refresh_bias_error_keeps_old_spec(make_session, monkeypatch):
 
     assert session.spec is old_spec
     assert session.glossary == old_gloss
-
-
-def test_topic_truncated_in_prompt(make_session):
-    session, _, _ = make_session({"glossary": "Jira"})
-    session._refresh_bias("x" * 500)
-    assert f"Chủ đề: {'x' * live.TOPIC_PROMPT_CHARS}." in session.spec.glossary
 
 
 def test_title_used_as_transcript_name(make_session):
