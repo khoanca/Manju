@@ -93,6 +93,38 @@ def test_keep_segment_keeps_short_real_phrases():
     assert engines.keep_segment("không không không được đâu", 0.1, -0.2) is True
 
 
+# Chuỗi thực địa 2026-07-20 (transcript 20260720-142230-live-1418): Whisper
+# "tự tin khi bịa" — nsp=0.000, logprob=-0.982 nên ngưỡng confidence không bắt.
+_FIELD_DIGIT_LOOP = "là 4 1 1 2 2 3 4 5 5 6 6 7 7"
+_FIELD_TAIL_LOOP = "là em bán " + "để " * 224
+
+
+def test_keep_segment_drops_confident_digit_loop():
+    assert engines.keep_segment(_FIELD_DIGIT_LOOP, 0.0, -0.982) is False
+
+
+def test_keep_segment_keeps_real_speech_containing_numbers():
+    # Câu thật có số phải sống sót — tỉ lệ chữ số thấp.
+    assert engines.keep_segment("và nó nằm trong 400 tải thôi anh", 0.1, -0.3) is True
+    assert engines.keep_segment("quý 4 tăng 15 phần trăm so với quý 3", 0.1, -0.3) is True
+
+
+def test_collapse_loops_trims_tail_keeps_real_prefix():
+    # Drop cả segment sẽ mất "là em bán" — chỉ thu đuôi lặp về 1 lần.
+    # Khoảng trắng cuối giữ nguyên như bản gốc (mlx nối segment bằng "".join).
+    assert engines.collapse_loops(_FIELD_TAIL_LOOP) == "là em bán để "
+
+
+def test_collapse_loops_leaves_normal_speech_untouched():
+    for text in (" ở đây là giải pháp trong business", "không không không được đâu", ""):
+        assert engines.collapse_loops(text) == text
+
+
+def test_collapse_loops_preserves_segment_spacing():
+    # mlx nối segment bằng "".join → mất khoảng trắng đầu là dính chữ segment trước.
+    assert engines.collapse_loops(" là em bán " + "để " * 10) == " là em bán để "
+
+
 def test_cpu_model_sizes_scales_with_hardware(monkeypatch):
     monkeypatch.setattr(engines, "_ram_gb", lambda: 32.0)
     monkeypatch.setattr(engines.os, "cpu_count", lambda: 12)

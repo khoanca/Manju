@@ -70,21 +70,77 @@ _HALLUCINATION_RE = re.compile(
 )
 
 
+# Lặp thật trong hội thoại tối đa vài lần ("không không không được đâu"); loop
+# thoái hoá của Whisper lặp hàng chục–hàng trăm lần. Ngưỡng đặt cao để chỉ cắt
+# cái sau (thực địa 2026-07-20: "là em bán" + 224 lần "để").
+_LOOP_RUN_MIN = 6
+_LOOP_TOKEN_MAXLEN = 4
+
+
+def _norm_tokens(text: str) -> list[str]:
+    return [t for t in (w.strip(".,!?…-").casefold() for w in text.split()) if t]
+
+
 def _is_token_loop(text: str) -> bool:
     """Hallucination lặp token ("J. J. J.", "ừ ừ ừ ừ"): cả segment chỉ là 1 từ
     ngắn lặp ≥3 lần. Câu thật không có dạng này — Whisper loop khi im lặng."""
-    tokens = [t.strip(".,!?…-") .casefold() for t in text.split()]
-    tokens = [t for t in tokens if t]
+    tokens = _norm_tokens(text)
     if len(tokens) < 3:
         return False
-    return len(set(tokens)) == 1 and len(tokens[0]) <= 4
+    return len(set(tokens)) == 1 and len(tokens[0]) <= _LOOP_TOKEN_MAXLEN
+
+
+def _is_digit_loop(text: str) -> bool:
+    """Whisper thoái hoá thành chuỗi đếm khi nghe không rõ đoạn CÓ số thật:
+    "là 1 lane, 4 lane" → "là 4 1 1 2 2 3 4 5 5 6 6 7 7" (thực địa 2026-07-20).
+    Segment gần như toàn chữ số → không còn nội dung cứu được, drop cả segment.
+    Câu thật có số ("nằm trong 400 tải thôi") tỉ lệ số thấp nên không dính."""
+    tokens = _norm_tokens(text)
+    if len(tokens) < 8:
+        return False
+    digits = sum(t.isdigit() for t in tokens)
+    return digits >= 6 and digits / len(tokens) > 0.7
+
+
+def collapse_loops(text: str) -> str:
+    """Cắt đuôi lặp thoái hoá, GIỮ phần câu thật đứng trước.
+
+    Whisper hay decode đúng vài từ đầu rồi kẹt vòng lặp tới hết cửa sổ; drop cả
+    segment sẽ mất nội dung thật, nên chỉ thu run ≥_LOOP_RUN_MIN về 1 lần.
+    """
+    words = text.split()
+    norm = _norm_tokens(text)
+    if len(words) != len(norm):  # token rỗng sau khi strip → giữ nguyên, không đoán
+        return text
+    out: list[str] = []
+    collapsed = False
+    i = 0
+    while i < len(words):
+        j = i + 1
+        while j < len(words) and norm[j] == norm[i]:
+            j += 1
+        run = j - i
+        if run >= _LOOP_RUN_MIN and len(norm[i]) <= _LOOP_TOKEN_MAXLEN:
+            out.append(words[i])
+            collapsed = True
+        else:
+            out.extend(words[i:j])
+        i = j
+    if not collapsed:
+        return text  # không có loop → trả nguyên văn, không đụng khoảng trắng
+    # mlx nối segment bằng "".join → phải giữ khoảng trắng đầu/cuối của segment.
+    lead = text[: len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()) :]
+    return f"{lead}{' '.join(out)}{trail}"
 
 
 def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
     # Ngưỡng như logic nội bộ của Whisper: no_speech cao + logprob thấp = bịa.
+    # Lưu ý: điều kiện AND này KHÔNG bắt được hallucination "tự tin"
+    # (nsp=0.000, logprob=-0.98) — nên phải chặn thêm theo hình dạng text.
     if no_speech_prob > 0.6 and avg_logprob < -1.0:
         return False
-    if _is_token_loop(text):
+    if _is_token_loop(text) or _is_digit_loop(text):
         return False
     return not _HALLUCINATION_RE.search(text)
 
@@ -140,7 +196,7 @@ def _mlx_scored(segments: list[dict], *, with_words: bool) -> DecodeResult:
             (w["word"], float(w["probability"])) for seg in kept for w in seg.get("words", [])
         )
     return DecodeResult(
-        "".join(seg["text"] for seg in kept).strip(),
+        "".join(collapse_loops(seg["text"]) for seg in kept).strip(),
         min((float(seg.get("avg_logprob", 0.0)) for seg in kept), default=0.0),
         words,
     )
@@ -165,7 +221,7 @@ def _fw_scored(segments: Iterable[object], *, with_words: bool) -> DecodeResult:
             for w in (getattr(seg, "words", None) or [])
         )
     return DecodeResult(
-        "".join(str(getattr(seg, "text", "")) for seg in kept).strip(),
+        "".join(collapse_loops(str(getattr(seg, "text", ""))) for seg in kept).strip(),
         min((float(getattr(seg, "avg_logprob", 0.0)) for seg in kept), default=0.0),
         words,
     )
@@ -234,12 +290,12 @@ class MlxEngine(Engine):
             {
                 "start": round(float(seg["start"]), 2),
                 "end": round(float(seg["end"]), 2),
-                "text": seg["text"].strip(),
+                "text": collapse_loops(seg["text"]).strip(),
             }
             for seg in result["segments"]
             if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
         ]
-        text = " ".join(s["text"] for s in segs).strip()
+        text = " ".join(str(s["text"]) for s in segs).strip()
         # mlx không trả duration file — lấy mốc cuối segment (đủ cho metadata).
         duration = float(result["segments"][-1]["end"]) if result["segments"] else 0.0
         on_progress(text, 1.0)
