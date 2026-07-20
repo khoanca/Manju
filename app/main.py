@@ -249,6 +249,28 @@ def api_edit_text(transcript_id: str, body: EditedTextIn):
     return {"ok": True, "edited_text": body.edited_text, "pairs_extracted": pairs_extracted}
 
 
+class GoldenIn(BaseModel):
+    """Body PATCH golden — đánh dấu bản sửa tay làm chuẩn đo (US-819)."""
+
+    golden: bool
+
+
+@app.patch("/api/transcripts/{transcript_id}/golden")
+def api_set_golden(transcript_id: str, body: GoldenIn):
+    """Bật/tắt cờ dùng bản ghi này làm chuẩn đo độ chính xác.
+
+    Yêu cầu đã có bản sửa tay: cờ golden trên bản máy chưa ai soát thì bộ đo
+    sẽ chấm điểm chính output của máy — số đẹp giả, vô nghĩa.
+    """
+    data = transcribe.read_transcript(transcript_id)
+    if data is None:
+        raise HTTPException(404, "Không tìm thấy bản ghi")
+    if body.golden and not (data.get("edited_text") or "").strip():
+        raise HTTPException(400, "Cần sửa tay bản ghi trước khi dùng làm chuẩn đo")
+    db.set_golden(transcript_id, body.golden)
+    return {"ok": True, "golden": body.golden}
+
+
 def _speaker_labels(speaker_map: dict | None) -> dict[int, str]:
     """{local_cluster_idx: speaker_id} + bảng speakers → {idx: tên} cho phụ đề."""
     if not speaker_map:

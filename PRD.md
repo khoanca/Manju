@@ -73,6 +73,17 @@ Hệ thống theo mô hình **local-first + org sync**:
 - US-814 — Speaker-ID realtime: nhận diện người nói theo utterance final, tag tên + bias theo người đang nói.
 - Chi tiết AC/task: `docs/plan-live-intelligence.md` (plan doc thắng PRD khi lệch, tới khi write-back).
 
+### FR-8 — Accuracy Bench: đo độ chính xác bằng bản sửa tay (net-new 2026-07-20)
+- Lý do: repo có 228 test nhưng không phép đo độ chính xác nào → mọi lỗi chất lượng đều do user phát hiện ngoài thực địa (3 hotfix ngày 2026-07-20). Test hiện tại kiểm code chạy đúng cơ chế, không kiểm sản phẩm phiên âm có đúng không.
+- Dùng lại `edited_text` mà FR-6 vốn đã thu thập làm chuẩn đo — một công sửa phục vụ hai mục đích (nuôi thư viện tự học + làm chuẩn chấm điểm), không tạo dataset riêng.
+- US-819 — Đánh dấu bản chuẩn: user sửa transcript cho đúng rồi bật cờ `golden`; chặn bật cờ khi chưa có bản sửa tay (chấm điểm máy bằng output của máy là số đẹp giả).
+- US-820 — Đo WER/CER bản máy thô và bản pass 2 so với chuẩn → trả lời "pass 2 giúp hay hại".
+- US-821 — So sánh cấu hình: decode lại audio gốc theo từng mức đệm biên VAD rồi chấm điểm, để chốt hằng số bằng số liệu thay vì phỏng đoán (`PREROLL_S=0.32` đầu / `0.2` đuôi hiện bất đối xứng, ra đời ở commit checkpoint không tài liệu).
+- US-822 — Đo lặp chữ chéo 2 segment liền nhau: cái giá phải theo dõi khi tăng đệm đuôi (nuốt sang audio câu kế tiếp).
+- WER/CER tự cài bằng Levenshtein, không thêm dependency; chuẩn hoá gộp hoa thường + bỏ dấu câu nhưng GIỮ dấu thanh và số (sai thanh điệu là lỗi thật).
+- Ngoài phạm vi đợt này: đo ảnh hưởng của `lexicon_*` / `revise` / `live_ident` (cần dựng lại toàn pipeline live, không chỉ cửa sổ decode).
+- Chi tiết AC/task: `docs/plan-accuracy-bench.md`.
+
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).
 - Sync audio lên org.

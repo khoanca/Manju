@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   audio_file TEXT,
   audio_dir  TEXT,
   speaker_map TEXT,  -- JSON {"<local_cluster_idx>": speaker_id | null} (lớp speaker)
-  edited_text TEXT  -- bản user sửa tay (US-801); NULL = chưa sửa, dùng text
+  edited_text TEXT,  -- bản user sửa tay (US-801); NULL = chưa sửa, dùng text
+  golden INTEGER DEFAULT 0  -- US-819: edited_text đủ đúng để làm chuẩn đo WER
 );
 CREATE INDEX IF NOT EXISTS idx_t_created ON transcripts(created_at DESC);
 
@@ -121,6 +122,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE transcripts ADD COLUMN speaker_map TEXT")
     if "edited_text" not in cols:
         conn.execute("ALTER TABLE transcripts ADD COLUMN edited_text TEXT")
+    if "golden" not in cols:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN golden INTEGER DEFAULT 0")
     spk_cols = {r["name"] for r in conn.execute("PRAGMA table_info(speakers)")}
     if "region" not in spk_cols:
         conn.execute("ALTER TABLE speakers ADD COLUMN region TEXT")
@@ -180,6 +183,7 @@ def _meta(row: sqlite3.Row) -> dict:
         "llm_model": row["llm_model"],
         "has_segments": row["segments"] is not None,
         "audio": row["audio_file"],
+        "golden": bool(row["golden"]),
     }
 
 
@@ -188,7 +192,7 @@ def list_transcripts() -> list[dict]:
         rows = conn.execute(
             """SELECT t.id, t.title, t.language, t.model, t.duration, t.created_at,
                       t.chars, t.words, t.corrected, t.llm_model, t.segments,
-                      t.audio_file, s.status AS sync_status
+                      t.audio_file, t.golden, s.status AS sync_status
                FROM transcripts t
                LEFT JOIN sync_state s ON s.transcript_id = t.id
                ORDER BY t.created_at DESC"""
@@ -248,6 +252,33 @@ def set_edited_text(transcript_id: str, edited_text: str | None) -> bool:
             (edited_text, transcript_id),
         )
     return cur.rowcount > 0
+
+
+def set_golden(transcript_id: str, golden: bool) -> bool:
+    """Đánh dấu bản sửa tay đủ đúng để làm chuẩn đo WER (US-819).
+    Trả False nếu transcript không tồn tại."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE transcripts SET golden = ? WHERE id = ?",
+            (1 if golden else 0, transcript_id),
+        )
+    return cur.rowcount > 0
+
+
+def golden_transcripts() -> list[dict]:
+    """Các bản chuẩn dùng để chấm điểm (US-820).
+
+    Chỉ nhận bản có `edited_text` thực sự có chữ: cờ golden bật mà bản sửa
+    rỗng thì không phải chuẩn, đo với nó sẽ ra số vô nghĩa.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT id, title, text, raw_text, edited_text, segments, audio_file, audio_dir
+               FROM transcripts
+               WHERE golden = 1 AND edited_text IS NOT NULL AND TRIM(edited_text) != ''
+               ORDER BY created_at DESC"""
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def transcript_audio_path(transcript_id: str) -> Path | None:
