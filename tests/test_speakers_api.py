@@ -211,12 +211,16 @@ def test_settings_put_without_glossary_keeps_it(client, monkeypatch):
 def test_settings_flag_words_and_denoise_roundtrip(client, monkeypatch):
     _stub_engine(monkeypatch)
     s = client.get("/api/settings").json()
-    assert (s["flag_words"], s["denoise_enabled"]) == (False, False)  # default tắt
-    r = client.put("/api/settings", json={"flag_words": True, "denoise_enabled": True})
+    assert (s["flag_words"], s["denoise_enabled"], s["live_ident"]) == (False, False, False)
+    r = client.put(
+        "/api/settings", json={"flag_words": True, "denoise_enabled": True, "live_ident": True}
+    )
     assert r.status_code == 200
     assert (r.json()["flag_words"], r.json()["denoise_enabled"]) == (True, True)
+    assert r.json()["live_ident"] is True
     assert db.get_setting("flag_words") == "1"
     assert db.get_setting("denoise_enabled") == "1"
+    assert db.get_setting("live_ident") == "1"
     # PUT 1 key không đụng key kia
     client.put("/api/settings", json={"flag_words": False})
     s = client.get("/api/settings").json()

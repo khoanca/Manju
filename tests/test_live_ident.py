@@ -54,6 +54,7 @@ def _enroll(env, name: str = "An") -> str:
     vec = np.ones(4, dtype=np.float32)
     db.save_voiceprint(sid, vec.tobytes(), 4, 1, None)
     env.setattr(diarize, "models_present", lambda: True)
+    db.set_setting("live_ident", "1")  # feature opt-in (default OFF)
     return sid
 
 
@@ -61,8 +62,19 @@ LONG_AUDIO = np.zeros(int(live.SAMPLE_RATE * 2.0), dtype=np.float32)
 SHORT_AUDIO = np.zeros(int(live.SAMPLE_RATE * 0.5), dtype=np.float32)
 
 
+def test_ident_default_off_even_with_voiceprints(env):
+    # Default OFF: embedding ONNX mỗi câu tranh CPU với decode (regression
+    # 2026-07-20) — có voiceprint + model vẫn phải tắt khi chưa bật setting.
+    sid = db.find_or_create_speaker("An")
+    db.save_voiceprint(sid, np.ones(4, dtype=np.float32).tobytes(), 4, 1, None)
+    env.setattr(diarize, "models_present", lambda: True)
+    session, _ = _make()
+    assert session._ident_thread is None
+
+
 def test_no_voiceprints_disables_ident_thread(env):
     env.setattr(diarize, "models_present", lambda: True)
+    db.set_setting("live_ident", "1")
     session, _ = _make()
     assert session._ident_thread is None
 
@@ -72,6 +84,7 @@ def test_no_voiceprints_disables_ident_thread(env):
 
 def test_missing_models_disables_ident_thread(env):
     env.setattr(diarize, "models_present", lambda: False)
+    db.set_setting("live_ident", "1")
     session, _ = _make()
     assert session._ident_thread is None
 

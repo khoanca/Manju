@@ -97,6 +97,7 @@ class SettingsIn(BaseModel):
     lexicon_url: str | None = None
     # Toggle bổ trợ live: đánh dấu từ nghi sai + khử nhiễu đầu vào ("0"/"1")
     flag_words: bool | None = None
+    live_ident: bool | None = None
     denoise_enabled: bool | None = None
 
 
@@ -133,6 +134,7 @@ def api_settings():
         },
         "lexicon": _lexicon_settings(),
         "flag_words": db.get_setting("flag_words", "0") == "1",
+        "live_ident": db.get_setting("live_ident", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
     }
 
@@ -162,6 +164,8 @@ def api_settings_put(body: SettingsIn):
         db.set_setting("lexicon_url", body.lexicon_url.strip())
     if body.flag_words is not None:
         db.set_setting("flag_words", "1" if body.flag_words else "0")
+    if body.live_ident is not None:
+        db.set_setting("live_ident", "1" if body.live_ident else "0")
     if body.denoise_enabled is not None:
         db.set_setting("denoise_enabled", "1" if body.denoise_enabled else "0")
     return {
@@ -170,6 +174,7 @@ def api_settings_put(body: SettingsIn):
         "glossary": db.get_setting("glossary", "") or "",
         "lexicon": _lexicon_settings(),
         "flag_words": db.get_setting("flag_words", "0") == "1",
+        "live_ident": db.get_setting("live_ident", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
     }
 

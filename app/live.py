@@ -310,8 +310,10 @@ class LiveSession:
         self._spk_names: dict[str, str] = {}
         self.ident_q: queue.Queue = queue.Queue()
         self._ident_thread: threading.Thread | None = None
+        # Opt-in (default OFF): embedding ONNX mỗi utterance tranh CPU/RAM với
+        # decode → tick chậm, cắt câu lệch (regression thực địa 2026-07-20).
         try:
-            if diarize.models_present():
+            if _setting_on("live_ident") and diarize.models_present():
                 self._vps = diarize.to_np_voiceprints(db.load_voiceprints())
                 self._spk_names = db.speaker_names()
         except Exception:  # noqa: BLE001
@@ -324,7 +326,7 @@ class LiveSession:
         self._decode_thread.start()
         if self.correct_enabled:
             self._correct_thread.start()
-        if REVISE_ENABLED:
+        if REVISE_ENABLED and self.engine.supports_revise:
             self._revise_thread.start()
         if self._ident_thread is not None:
             self._ident_thread.start()
@@ -513,7 +515,12 @@ class LiveSession:
                 # để topic bám sát mạch cuộc họp.
                 self.tracker.add(text)
             self._queue_ident(utt, audio)
-            if REVISE_ENABLED and low_conf and self.revision_q.qsize() < REVISION_BACKLOG_MAX:
+            if (
+                REVISE_ENABLED
+                and self.engine.supports_revise
+                and low_conf
+                and self.revision_q.qsize() < REVISION_BACKLOG_MAX
+            ):
                 # US-811: revise nền xong mới pass 2 — LLM sửa trên text tốt nhất;
                 # backlog đầy thì rơi về path pass-2 thường, không nghẽn.
                 self.revision_q.put((utt, np.array(audio, copy=True), text, uncertain))
