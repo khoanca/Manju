@@ -53,6 +53,11 @@ def _mock_web(monkeypatch, result=([], 0, 0, 0)):
     monkeypatch.setattr(slang_trend, "web_digest", lambda: result)
 
 
+def _no_apify(monkeypatch):
+    """Tắt adapter Apify (US-818) — máy dev có thể có APIFY_TOKEN thật."""
+    monkeypatch.setattr(slang_trend, "APIFY_TOKEN", "")
+
+
 # ── _parse_entries: validate lỏng, skip-not-raise ──────────────────────────
 def test_parse_entries_skips_garbage():
     data = _GOOD + [
@@ -86,6 +91,7 @@ def test_parse_entries_caps_max_entries():
 def test_run_trend_update_imports_pending(tmp_db, monkeypatch):
     _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
     _mock_web(monkeypatch)
+    _no_apify(monkeypatch)
     res = run_trend_update()
     assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 0)
     rows = db.list_corrections(source="trend")
@@ -102,6 +108,7 @@ def test_run_trend_update_llm_down_returns_zero_sources(tmp_db, monkeypatch):
 
     monkeypatch.setattr(correct, "chat_once", boom)
     _mock_web(monkeypatch)
+    _no_apify(monkeypatch)
     res = run_trend_update()
     assert (res.sources_ok, res.sources_skipped, res.new_pending) == (0, 1, 0)
     assert db.list_corrections(source="trend") == []
@@ -110,6 +117,7 @@ def test_run_trend_update_llm_down_returns_zero_sources(tmp_db, monkeypatch):
 def test_pending_trend_excluded_from_bias_until_approved(tmp_db, monkeypatch):
     _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
     _mock_web(monkeypatch)
+    _no_apify(monkeypatch)
     run_trend_update()
     assert "gét gô mới" not in build_bias("")
     row = next(r for r in db.list_corrections(source="trend") if r["right"] == "gét gô mới")
@@ -133,6 +141,7 @@ def test_endpoint_502_when_all_sources_fail(client, monkeypatch):
 
     monkeypatch.setattr(correct, "chat_once", boom)
     _mock_web(monkeypatch, ([], 0, 0, 1))
+    _no_apify(monkeypatch)
     assert client.post("/api/lexicon/slang-trend").status_code == 502
 
 
@@ -140,6 +149,7 @@ def test_endpoint_imports_and_returns_counts(client, monkeypatch):
     monkeypatch.setattr(correct, "OPENROUTER_API_KEY", "k")
     _mock_llm(monkeypatch, json.dumps(_GOOD + [{"wrong": "x", "right": "x"}], ensure_ascii=False))
     _mock_web(monkeypatch)
+    _no_apify(monkeypatch)
     r = client.post("/api/lexicon/slang-trend")
     assert r.status_code == 200
     d = r.json()
@@ -209,6 +219,106 @@ def test_run_trend_update_web_survives_llm_down(tmp_db, monkeypatch):
         raise RuntimeError("digest trực tiếp rớt")
 
     monkeypatch.setattr(correct, "chat_once", picky)
+    _no_apify(monkeypatch)
     res = run_trend_update()
     assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 1)
     assert len(db.list_corrections(source="trend", status="pending")) == 2
+
+
+# ── US-818: Apify adapter (opt-in APIFY_TOKEN) ─────────────────────────────
+class _ApifyResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_apify_hashtags_from_setting(tmp_db):
+    assert slang_trend._apify_hashtags() == ["xuhuong"]
+    db.set_setting("slang_hashtags", "  #genz  tiktokvietnam ")
+    assert slang_trend._apify_hashtags() == ["genz", "tiktokvietnam"]
+
+
+def test_harvest_text_prefers_known_keys():
+    items = [
+        {"text": "caption một"},
+        {"desc": "mô tả hai", "id": 5},
+        {"noise": 123},
+        {"text": "  "},
+    ]
+    assert slang_trend._harvest_text(items) == "caption một\nmô tả hai"
+
+
+def test_apify_digest_runs_actor_and_parses(tmp_db, monkeypatch):
+    monkeypatch.setattr(slang_trend, "APIFY_TOKEN", "tok")
+    db.set_setting("slang_hashtags", "genz")
+    captured = {}
+
+    def fake_post(url, params=None, json=None, timeout=None):
+        captured.update(url=url, params=params, input=json)
+        return _ApifyResp([{"text": "caption chứa slang"}])
+
+    monkeypatch.setattr(slang_trend.httpx, "post", fake_post)
+    _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    rows, skipped = slang_trend.apify_digest()
+    assert rows == [(e["wrong"], e["right"]) for e in _GOOD]
+    assert "clockworks~tiktok-scraper/run-sync-get-dataset-items" in captured["url"]
+    assert captured["params"] == {"token": "tok"}
+    assert captured["input"]["hashtags"] == ["genz"]
+
+
+def test_apify_digest_raises_when_no_text(tmp_db, monkeypatch):
+    monkeypatch.setattr(slang_trend, "APIFY_TOKEN", "tok")
+    monkeypatch.setattr(
+        slang_trend.httpx, "post",
+        lambda url, **kw: _ApifyResp([{"id": 1}, "lạ"]),
+    )
+    with pytest.raises(ValueError):
+        slang_trend.apify_digest()
+
+
+def test_run_trend_update_counts_apify_source(tmp_db, monkeypatch):
+    # LLM digest rớt, web trống, Apify sống → vẫn nhập pending từ caption tươi.
+    monkeypatch.setattr(slang_trend, "APIFY_TOKEN", "tok")
+    _mock_web(monkeypatch)
+    monkeypatch.setattr(
+        slang_trend.httpx, "post",
+        lambda url, **kw: _ApifyResp([{"text": "caption chứa slang"}]),
+    )
+
+    def picky(system, user, timeout=0):
+        if "caption chứa slang" in user:
+            return json.dumps(_GOOD, ensure_ascii=False)
+        raise RuntimeError("digest trực tiếp rớt")
+
+    monkeypatch.setattr(correct, "chat_once", picky)
+    res = run_trend_update()
+    assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 1)
+
+
+def test_run_trend_update_apify_error_is_skip(tmp_db, monkeypatch):
+    monkeypatch.setattr(slang_trend, "APIFY_TOKEN", "tok")
+    _mock_web(monkeypatch)
+
+    def boom_post(url, **kw):
+        raise OSError("hết quota")
+
+    monkeypatch.setattr(slang_trend.httpx, "post", boom_post)
+    _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    res = run_trend_update()
+    assert (res.new_pending, res.sources_ok, res.sources_skipped) == (2, 1, 1)
+
+
+def test_apify_disabled_never_called(tmp_db, monkeypatch):
+    _no_apify(monkeypatch)
+    _mock_web(monkeypatch)
+    monkeypatch.setattr(
+        slang_trend, "_apify_items",
+        lambda: pytest.fail("APIFY_TOKEN rỗng thì không được gọi Apify"),
+    )
+    _mock_llm(monkeypatch, json.dumps(_GOOD, ensure_ascii=False))
+    assert run_trend_update().sources_ok == 1

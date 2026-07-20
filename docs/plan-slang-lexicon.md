@@ -27,11 +27,18 @@ Ranking: sửa tối thiểu `_rank_rows`/`top_pairs` — khi có `regions`, tag
 | T-111 | Tests US-816 (parse garbage, import pending, 503, pending không vào bias) | US-816 | → T-109 | tests/test_slang_trend.py | [x] |
 | T-112 | Web adapter: `_robots_ok` (robotparser), `_fetch_page` (httpx, UA riêng, fail→None), `_html_to_text` (stdlib HTMLParser), `web_digest` + setting `slang_sources`; wire vào `run_trend_update` | US-817 | → T-108 | app/slang_trend.py, app/main.py | [x] |
 | T-113 | Tests US-817 (robots deny skip, fetch fail skip, html→text, partial failure) | US-817 | → T-112 | tests/test_slang_trend.py | [x] |
+| T-114 | Apify adapter: `apify_digest` (actor `clockworks~tiktok-scraper`, endpoint run-sync-get-dataset-items — verify API 2026-07-20), `_harvest_text`, opt-in `APIFY_TOKEN` env; wire vào `run_trend_update` | US-818 | → T-108 | app/slang_trend.py | [x] |
+| T-115 | Setting `slang_hashtags` + ô nhập UI (chỉ hiện khi server có APIFY_TOKEN, qua `apify_enabled` trong GET /api/settings) | US-818 | → T-114 | app/main.py, app/static/index.html, app/static/app.js | [x] |
+| T-116 | Tests US-818 (hashtag setting, harvest text, gọi actor đúng input, lỗi/hết quota → skip nguồn, token rỗng không gọi) | US-818 | → T-114 | tests/test_slang_trend.py | [x] |
 
 ## Stacked PRs (≤400 LOC mỗi PR)
 - **PR 1** = T-101..106 (US-815) — điểm tích hợp user-visible đầu tiên (toggle dùng được ngay).
 - **PR 2** = T-107..111 (US-816) — nút trend + flow duyệt.
 - **PR 3** = T-112..113 (US-817) — mở rộng nguồn web, phụ thuộc PR 2.
+- **PR 4** = T-114..116 (US-818, bổ sung 2026-07-20 theo yêu cầu user "quất Apify") — caption MXH tươi qua Apify, phụ thuộc PR 2.
+
+### US-818 — Apify adapter (bổ sung sau khi plan gốc Implemented)
+Scrape MXH qua dịch vụ bên thứ ba thay vì tự scrape: actor Apify (mặc định `clockworks~tiktok-scraper`, đổi qua env `APIFY_ACTOR`) chạy trên hạ tầng Apify, app chỉ gọi REST `run-sync-get-dataset-items` rồi gom caption (`_harvest_text`, key `text/desc/description/title`) → cùng đường trích xuất LLM → pending. Opt-in `APIFY_TOKEN` (.env, như OPENROUTER_API_KEY); hashtag quét qua setting `slang_hashtags` (mặc định `xuhuong`). ToS nền tảng MXH: trách nhiệm chuyển cho lựa chọn dùng Apify của user — app không tự né anti-bot. Lỗi/hết quota → skip nguồn như mọi nguồn khác.
 
 ## Edge Cases & Error Handling
 - LLM trả garbage/không phải JSON/lặp cặp → `_parse_entries` skip từng entry (đếm `skipped`), UNIQUE(wrong,right) + INSERT OR IGNORE chống trùng khi bấm lại.

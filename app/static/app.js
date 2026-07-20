@@ -86,6 +86,9 @@ async function loadServerSettings(){
     for (const [id, key] of Object.entries(LEX_IDS)) $(id).checked = !!lex[key];
     if (document.activeElement !== $("lexUrl")) $("lexUrl").value = lex.url || "";
     if (document.activeElement !== $("slangSources")) $("slangSources").value = s.slang_sources || "";
+    // US-818: ô hashtag chỉ hiện khi server có APIFY_TOKEN
+    $("slangHashtagsRow").classList.toggle("hidden", !s.apify_enabled);
+    if (document.activeElement !== $("slangHashtags")) $("slangHashtags").value = s.slang_hashtags || "";
     syncLexBtn();
   } catch { $("engineVal").textContent = "—"; }
 }
@@ -715,6 +718,14 @@ $("slangSources").addEventListener("change", async () => {
       body: JSON.stringify({ slang_sources: $("slangSources").value.trim() }),
     });
   } catch (e) { console.warn("Chưa sync nguồn trend lên server:", e.message); }
+});
+$("slangHashtags").addEventListener("change", async () => {
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slang_hashtags: $("slangHashtags").value.trim() }),
+    });
+  } catch (e) { console.warn("Chưa sync hashtag Apify lên server:", e.message); }
 });
 $("slangTrend").onclick = async () => {
   const btn = $("slangTrend");

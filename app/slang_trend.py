@@ -1,10 +1,13 @@
 """Tổng hợp slang/teencode MXH đang hot → nhập thư viện chờ duyệt (US-816/817).
 
-Hai loại nguồn, cùng một đường trích xuất LLM:
+Ba loại nguồn, cùng một đường trích xuất LLM:
 1. LLM cloud (OpenRouter qua `correct.chat_once`) tự liệt kê trend (US-816);
 2. Trang web PUBLIC tổng hợp trend MXH (US-817) — chỉ trang không cần đăng
    nhập, tôn trọng robots.txt, KHÔNG né anti-bot: bị chặn/lỗi thì skip nguồn.
-   TikTok/FB/X trực tiếp nằm ngoài phạm vi (API đóng/tường đăng nhập).
+   App không scrape TikTok/FB/X trực tiếp (API đóng/tường đăng nhập);
+3. Apify (US-818, opt-in APIFY_TOKEN) — caption MXH tươi qua actor bên thứ ba
+   (mặc định TikTok theo hashtag): scraping do hạ tầng Apify thực hiện,
+   user tự chịu quyết định ToS nền tảng.
 
 Mọi entry nhập với source='trend', status='pending' — KHÔNG tự vào bias
 ASR/pass 2 cho tới khi user duyệt trong Settings → Thư viện từ. Validate lỏng
@@ -14,6 +17,7 @@ checksum): entry hỏng thì bỏ, đếm vào `skipped` cho user thấy.
 from __future__ import annotations
 
 import json
+import os
 import urllib.parse
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -35,6 +39,18 @@ USER_AGENT = "ManjuLexiconBot/1.0 (local meeting transcriber; slang lexicon upda
 # Trang public không cần đăng nhập (đã verify 200 lúc implement 2026-07-20);
 # user thêm bài báo trend qua setting `slang_sources` (URL cách nhau khoảng trắng).
 DEFAULT_SOURCES = ("https://vi.wikipedia.org/wiki/Tiếng_lóng",)
+
+# US-818: Apify — scrape MXH qua dịch vụ bên thứ ba (user tự chịu ToS nền tảng,
+# app không né anti-bot). Opt-in bằng APIFY_TOKEN trong .env như OPENROUTER_API_KEY.
+APIFY_URL = os.environ.get("APIFY_URL", "https://api.apify.com/v2")
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
+APIFY_ACTOR = os.environ.get("APIFY_ACTOR", "clockworks~tiktok-scraper")
+APIFY_TIMEOUT_S = 300.0  # trần của endpoint run-sync bên Apify
+APIFY_RESULTS_PER_PAGE = 30
+DEFAULT_HASHTAGS = ("xuhuong",)
+# Key chứa text trong dataset item — 'text' là caption của tiktok-scraper;
+# các key còn lại phủ actor FB/X nếu user đổi APIFY_ACTOR.
+_TEXT_KEYS = ("text", "desc", "description", "title")
 
 _EXTRACT_SYSTEM = (
     "Bạn là chuyên gia ngôn ngữ mạng xã hội Việt Nam, đang xây từ điển giúp "
@@ -196,9 +212,64 @@ def web_digest() -> tuple[list[tuple[str, str]], int, int, int]:
 
 def _page_prompt(page_text: str) -> str:
     return (
-        "Trích các cặp từ lóng/teencode đang thịnh hành từ nội dung bài viết "
-        "sau (chỉ lấy từ được NÓI thành tiếng):\n\n" + page_text
+        "Trích các cặp từ lóng/teencode đang thịnh hành từ nội dung bài viết/"
+        "caption MXH sau (chỉ lấy từ được NÓI thành tiếng):\n\n" + page_text
     )
+
+
+# ── US-818: Apify adapter — scrape MXH qua bên thứ ba (opt-in) ─────────────
+def apify_enabled() -> bool:
+    return bool(APIFY_TOKEN)
+
+
+def _apify_hashtags() -> list[str]:
+    """Hashtag TikTok cần quét: setting `slang_hashtags` (cách nhau khoảng
+    trắng, bỏ dấu # thừa) — rỗng thì dùng DEFAULT_HASHTAGS."""
+    try:
+        raw = db.get_setting("slang_hashtags", "") or ""
+    except Exception:  # noqa: BLE001 — DB hỏng thì dùng mặc định
+        raw = ""
+    tags = [t.lstrip("#") for t in raw.split() if t.lstrip("#")]
+    return tags or list(DEFAULT_HASHTAGS)
+
+
+def _apify_items() -> list[dict]:
+    """Chạy actor Apify đồng bộ, trả dataset items. Lỗi HTTP/timeout → raise,
+    caller đếm nguồn skip."""
+    resp = httpx.post(
+        f"{APIFY_URL}/acts/{APIFY_ACTOR}/run-sync-get-dataset-items",
+        params={"token": APIFY_TOKEN},
+        json={"hashtags": _apify_hashtags(), "resultsPerPage": APIFY_RESULTS_PER_PAGE},
+        timeout=APIFY_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else []
+
+
+def _harvest_text(items: list[dict]) -> str:
+    """Gom text (caption/mô tả) từ dataset items — mỗi item lấy key đầu tiên
+    trong _TEXT_KEYS có giá trị str; cap MAX_PAGE_CHARS như trang web."""
+    chunks: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in _TEXT_KEYS:
+            val = item.get(key)
+            if isinstance(val, str) and val.strip():
+                chunks.append(val.strip())
+                break
+    return "\n".join(chunks)[:MAX_PAGE_CHARS]
+
+
+def apify_digest() -> tuple[list[tuple[str, str]], int]:
+    """Nguồn 3: caption MXH tươi từ Apify → cùng prompt trích xuất LLM.
+    Không có text (actor đổi schema/quota hết) → raise để đếm nguồn skip."""
+    text = _harvest_text(_apify_items())
+    if not text:
+        raise ValueError("Apify không trả về text nào")
+    raw = correct.chat_once(_EXTRACT_SYSTEM, _page_prompt(text), timeout=LLM_TIMEOUT_S)
+    return _parse_entries(raw)
 
 
 def run_trend_update() -> TrendResult:
@@ -218,6 +289,14 @@ def run_trend_update() -> TrendResult:
     skipped += w_skip
     ok += w_ok
     failed += w_fail
+    if apify_enabled():
+        try:
+            rows, bad = apify_digest()
+            pairs += rows
+            skipped += bad
+            ok += 1
+        except Exception:  # noqa: BLE001 — Apify rớt/hết quota chỉ là skip nguồn
+            failed += 1
     uniq: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for w, r in pairs:
