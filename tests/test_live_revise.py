@@ -16,6 +16,7 @@ from app import db, engines, live, transcribe
 class FakeEngine:
     def __init__(self, results: list | None = None, revised: str | None = None):
         self.info = SimpleNamespace(tier="mlx", model_name="fake")
+        self.supports_revise = True
         self.results = list(results or [])
         self.revised = revised
         self.revise_calls: list[np.ndarray] = []
@@ -131,6 +132,20 @@ def test_revision_backlog_full_falls_through_to_pass2(make_session):
     session._finalize(AUDIO)
 
     assert session.revision_q.qsize() == live.REVISION_BACKLOG_MAX
+    assert session.correction_q.get_nowait() == (1, LONG, ())
+
+
+def test_engine_without_revise_routes_straight_to_pass2(make_session):
+    # mlx hiện tại (chưa có beam search): reroute qua revision_q chỉ tốn decode
+    # lock + trễ pass 2 — supports_revise=False phải đi thẳng pass 2 như bản cũ.
+    eng = FakeEngine([engines.DecodeResult(LONG, min_logprob=-0.9)])
+    eng.supports_revise = False
+    session, _, _ = make_session(engine=eng)
+    session.utt_seq = 1
+
+    session._finalize(AUDIO)
+
+    assert session.revision_q.qsize() == 0
     assert session.correction_q.get_nowait() == (1, LONG, ())
 
 

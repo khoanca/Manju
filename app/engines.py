@@ -91,6 +91,10 @@ def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
 
 class Engine(ABC):
     info: EngineInfo
+    # True khi revise() thật sự decode được bản tốt hơn. Live CHỈ reroute câu
+    # low-confidence qua revision_q khi cờ này bật — engine không hỗ trợ mà vẫn
+    # reroute thì chỉ tốn decode lock + trễ pass 2 (regression thực địa 2026-07-20).
+    supports_revise: bool = False
 
     def decode(self, audio: np.ndarray, spec: DecodeSpec, *, final: bool) -> str:
         """Decode 1 utterance cho live. final=False có thể raise DecodeBusy."""
@@ -200,7 +204,7 @@ class MlxEngine(Engine):
 
     def revise(self, audio: np.ndarray, spec: DecodeSpec) -> str | None:
         # mlx-whisper 0.4.3 raise NotImplementedError với beam_size (chưa có beam
-        # search) → except trả None; tự chạy khi upstream bổ sung. temperature phải
+        # search) → except trả None; khi upstream bổ sung: bật supports_revise=True. temperature phải
         # 0.0: DecodingOptions cấm trộn beam + sampling.
         if not _decode_lock.acquire(blocking=False):
             return None
@@ -248,6 +252,8 @@ class FwEngine(Engine):
     def __init__(self, device: str, compute_type: str):
         self.device = device
         self.compute_type = compute_type
+        # cpu: revise bằng model upload to hơn; cuda: final đã turbo beam-5.
+        self.supports_revise = device == "cpu"
         self._models: dict[str, object] = {}
         self._lock = threading.Lock()
         if device == "cpu":

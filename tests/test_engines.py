@@ -73,6 +73,13 @@ def test_keep_segment_keeps_real_speech():
     assert engines.keep_segment("triển khai Kubernetes", 0.1, -0.3) is True
 
 
+def test_supports_revise_flags():
+    # base (mlx kế thừa — chưa có beam search) tắt; chỉ cpu tier bật.
+    assert engines.Engine.supports_revise is False
+    assert engines.FwEngine("cpu", "int8").supports_revise is True
+    assert engines.FwEngine("cuda", "float16").supports_revise is False
+
+
 def test_keep_segment_drops_token_loop_hallucination():
     # Bug thực địa 2026-07-20: Whisper loop 1 token ngắn khi im lặng.
     assert engines.keep_segment("J. J. J.", 0.1, -0.2) is False
