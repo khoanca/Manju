@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import (
+    cleanup,
     correct,
     corrections,
     db,
@@ -116,6 +117,12 @@ class SettingsIn(BaseModel):
     flag_words: bool | None = None
     live_ident: bool | None = None
     denoise_enabled: bool | None = None
+    # Khử ồn mở rộng: cường độ (0-100), chế độ, lọc rumble (Hz), notch hum, denoise file upload
+    denoise_strength: int | None = None
+    denoise_mode: str | None = None
+    denoise_highpass: int | None = None
+    denoise_hum: str | None = None
+    denoise_upload_enabled: bool | None = None
     # Lớp B: tự đoán ngành + nạp lexicon ngành khi transcribe (mặc định bật)
     domain_auto: bool | None = None
 
@@ -128,6 +135,18 @@ _LEXICON_REGIONS = {
     "lexicon_en": "en_accent",
     "lexicon_slang": "slang",
 }
+
+
+def _denoise_settings() -> dict:
+    """Trạng thái khử ồn cho UI (default = hành vi US-813 cũ)."""
+    return {
+        "enabled": db.get_setting("denoise_enabled", "0") == "1",
+        "strength": int(db.get_setting("denoise_strength", "100") or "100"),
+        "mode": db.get_setting("denoise_mode", "stationary"),
+        "highpass": int(db.get_setting("denoise_highpass", "0") or "0"),
+        "hum": db.get_setting("denoise_hum", "off"),
+        "upload_enabled": db.get_setting("denoise_upload_enabled", "0") == "1",
+    }
 
 
 def _lexicon_settings() -> dict:
@@ -159,6 +178,7 @@ def api_settings():
         "flag_words": db.get_setting("flag_words", "0") == "1",
         "live_ident": db.get_setting("live_ident", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
+        "denoise": _denoise_settings(),
         "domain_auto": db.get_setting("domain_auto", "1") == "1",
         "domains": list(corrections.DOMAINS),
     }
@@ -197,6 +217,18 @@ def api_settings_put(body: SettingsIn):
         db.set_setting("live_ident", "1" if body.live_ident else "0")
     if body.denoise_enabled is not None:
         db.set_setting("denoise_enabled", "1" if body.denoise_enabled else "0")
+    if body.denoise_strength is not None:
+        db.set_setting("denoise_strength", str(max(0, min(100, body.denoise_strength))))
+    if body.denoise_mode is not None:
+        mode = body.denoise_mode if body.denoise_mode in ("stationary", "nonstationary") else "stationary"
+        db.set_setting("denoise_mode", mode)
+    if body.denoise_highpass is not None:
+        db.set_setting("denoise_highpass", str(max(0, body.denoise_highpass)))
+    if body.denoise_hum is not None:
+        hum = body.denoise_hum if body.denoise_hum in ("off", "50", "60") else "off"
+        db.set_setting("denoise_hum", hum)
+    if body.denoise_upload_enabled is not None:
+        db.set_setting("denoise_upload_enabled", "1" if body.denoise_upload_enabled else "0")
     if body.domain_auto is not None:
         db.set_setting("domain_auto", "1" if body.domain_auto else "0")
     return {
@@ -207,6 +239,7 @@ def api_settings_put(body: SettingsIn):
         "flag_words": db.get_setting("flag_words", "0") == "1",
         "live_ident": db.get_setting("live_ident", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
+        "denoise": _denoise_settings(),
         "domain_auto": db.get_setting("domain_auto", "1") == "1",
     }
 
@@ -276,6 +309,27 @@ def api_set_golden(transcript_id: str, body: GoldenIn):
         raise HTTPException(400, "Cần sửa tay bản ghi trước khi dùng làm chuẩn đo")
     db.set_golden(transcript_id, body.golden)
     return {"ok": True, "golden": body.golden}
+
+
+@app.post("/api/transcripts/{transcript_id}/review-fix")
+def api_review_fix(transcript_id: str) -> dict:
+    """Rà lặp/nhiễu toàn văn (tất định, không gọi LLM) và TRẢ BẢN XEM TRƯỚC —
+    KHÔNG tự lưu. Frontend hiển thị rồi người dùng bấm Lưu (PATCH .../text) để áp.
+
+    Chống lỗi Whisper lặp cụm/token khi có noise (live-1620, live-1653): bộ lọc
+    live chỉ soi từng segment, còn loop có thể vắt qua nhiều segment hoặc lọt.
+    """
+    data = transcribe.read_transcript(transcript_id)
+    if data is None:
+        raise HTTPException(404, "Không tìm thấy bản ghi")
+    current = data.get("edited_text", data["text"])
+    result = cleanup.review_and_fix(current)
+    return {
+        "cleaned": result.cleaned,
+        "chars_removed": result.chars_removed,
+        "dropped": result.dropped,
+        "changed": result.cleaned != current,
+    }
 
 
 def _speaker_labels(speaker_map: dict | None) -> dict[int, str]:

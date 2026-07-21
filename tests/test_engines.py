@@ -125,6 +125,44 @@ def test_collapse_loops_preserves_segment_spacing():
     assert engines.collapse_loops(" là em bán " + "để " * 10) == " là em bán để "
 
 
+def test_collapse_loops_ngram_cycle():
+    # Bug thực địa 2026-07-21 (live-1620): loop chu kỳ ≥2 token, giữ 1 chu kỳ.
+    assert engines.collapse_loops("ok " + "tick là " * 40 + "xong") == "ok tick là xong"
+    assert engines.collapse_loops("thì " + "sao mà " * 50 + "rồi") == "thì sao mà rồi"
+    assert engines.collapse_loops("a " + "tạm biến " * 30 + "b") == "a tạm biến b"
+
+
+def test_collapse_loops_keeps_short_real_repetition():
+    # Nhấn mạnh thật lặp ít lần (< ngưỡng chu kỳ) phải sống sót nguyên văn.
+    for text in ("từng case, từng case một bản chất", "đúng rồi đúng rồi đúng rồi"):
+        assert engines.collapse_loops(text) == text
+
+
+def test_collapse_loops_intra_token_repeat():
+    # Bug thực địa 2026-07-21 (live-1653): 1 token dính liền, lặp bên trong.
+    assert engines.collapse_loops("H" + "bright" * 100) == "Hbright"
+    assert engines.collapse_loops("abc" + "xy" * 50) == "abcxy"
+
+
+def test_collapse_loops_intra_token_leaves_normal_words():
+    # Từ thật không phải khối lặp liền ≥4 lần → giữ nguyên.
+    for text in ("Kubernetes triển khai business", "hello foobar"):
+        assert engines.collapse_loops(text) == text
+
+
+def test_strip_hallucination_phrases():
+    text = "nội dung thật hãy đăng kí cho kênh lalaschool nội dung tiếp"
+    cleaned, dropped = engines.strip_hallucination_phrases(text)
+    assert "đăng kí" not in cleaned
+    assert "nội dung thật" in cleaned and "nội dung tiếp" in cleaned
+    assert dropped  # có ghi lại cụm đã cắt
+
+
+def test_strip_hallucination_phrases_noop():
+    text = "câu bình thường không có cụm nhiễu nào"
+    assert engines.strip_hallucination_phrases(text) == (text, [])
+
+
 def test_cpu_model_sizes_scales_with_hardware(monkeypatch):
     monkeypatch.setattr(engines, "_ram_gb", lambda: 32.0)
     monkeypatch.setattr(engines.os, "cpu_count", lambda: 12)

@@ -64,7 +64,7 @@ _decode_lock = threading.Lock()
 # Whisper train trên phụ đề YouTube → gặp im lặng/noise hay "đoán bừa" ra mấy
 # câu outro quen thuộc. Dùng chung cho mọi backend (live tắt vad_filter nên dễ dính).
 _HALLUCINATION_RE = re.compile(
-    r"ghiền mì gõ|subscribe|đăng ký kênh|like và chia sẻ"
+    r"ghiền mì gõ|subscribe|đăng k[íý] .{0,25}kênh|hãy đăng k[íý]|like và chia sẻ"
     r"|cảm ơn các bạn đã (xem|theo dõi|lắng nghe)|hẹn gặp lại các bạn"
     r"|thanks for watching|please like and",
     re.IGNORECASE,
@@ -76,10 +76,24 @@ _HALLUCINATION_RE = re.compile(
 # cái sau (thực địa 2026-07-20: "là em bán" + 224 lần "để").
 _LOOP_RUN_MIN = 6
 _LOOP_TOKEN_MAXLEN = 4
+# Loop chu kỳ ≥2 token ("tick là tick là …", "sao mà sao mà …" — thực địa
+# live-1620): không thể là nhấn mạnh thật khi lặp nhiều lần, nên ngưỡng thấp
+# hơn period-1 nhưng vẫn ≥4 để chừa "từng case, từng case một".
+_CYCLE_MAX_PERIOD = 5
+_CYCLE_MIN_REPEAT = 4
+# Lặp bên trong 1 token, không có khoảng trắng ("Hbrightbrightbright…" —
+# live-1653): đơn vị 2..12 ký tự lặp ≥4 lần → thu về 1. Câu thật không có dạng
+# này (không từ tiếng Việt/Anh nào là 1 khối lặp liền ≥4 lần).
+_INTRA_LOOP_RE = re.compile(r"(.{2,12}?)\1{3,}")
 
 
 def _norm_tokens(text: str) -> list[str]:
     return [t for t in (w.strip(".,!?…-").casefold() for w in text.split()) if t]
+
+
+def _norm_aligned(words: list[str]) -> list[str]:
+    """Như _norm_tokens nhưng GIỮ chỉ số 1:1 với words (token rỗng → "")."""
+    return [w.strip(".,!?…-").casefold() for w in words]
 
 
 def _is_token_loop(text: str) -> bool:
@@ -103,36 +117,73 @@ def _is_digit_loop(text: str) -> bool:
     return digits >= 6 and digits / len(tokens) > 0.7
 
 
-def collapse_loops(text: str) -> str:
-    """Cắt đuôi lặp thoái hoá, GIỮ phần câu thật đứng trước.
+def _cycle_run(norm: list[str], i: int) -> tuple[int, int]:
+    """Tại vị trí i, tìm chu kỳ ngắn nhất lặp thoái hoá. Trả (period, repeats);
+    period=0 nghĩa là không có loop đáng cắt. Period nhỏ nhất thắng."""
+    n = len(norm)
+    for p in range(1, min(_CYCLE_MAX_PERIOD, (n - i) // 2) + 1):
+        r = 1
+        while i + (r + 1) * p <= n and norm[i + r * p : i + (r + 1) * p] == norm[i : i + p]:
+            r += 1
+        if r < 2:
+            continue
+        # period 1 giữ hành vi cũ: chỉ cắt token NGẮN lặp ≥6 (số/thán từ Whisper
+        # kẹt vòng), khỏi cắt nhấn mạnh dài. period ≥2 cần ≥4 chu kỳ.
+        if p == 1 and (r < _LOOP_RUN_MIN or len(norm[i]) > _LOOP_TOKEN_MAXLEN):
+            continue
+        if p >= 2 and r < _CYCLE_MIN_REPEAT:
+            continue
+        return p, r
+    return 0, 0
 
-    Whisper hay decode đúng vài từ đầu rồi kẹt vòng lặp tới hết cửa sổ; drop cả
-    segment sẽ mất nội dung thật, nên chỉ thu run ≥_LOOP_RUN_MIN về 1 lần.
+
+def collapse_loops(text: str) -> str:
+    """Cắt lặp thoái hoá, GIỮ phần câu thật xung quanh.
+
+    Ba dạng loop của Whisper khi gặp noise/im lặng: token đơn lặp ("để để để…"),
+    chu kỳ ≥2 token ("tick là tick là…"), và lặp bên trong 1 token dính liền
+    ("Hbrightbright…"). Mỗi dạng thu về 1 lần thay vì drop cả segment (còn nội
+    dung thật đứng trước/sau).
     """
-    words = text.split()
-    norm = _norm_tokens(text)
-    if len(words) != len(norm):  # token rỗng sau khi strip → giữ nguyên, không đoán
-        return text
+    # Bước 1: lặp trong-token (không có space) — xử trước khi tách từ.
+    intra = _INTRA_LOOP_RE.sub(r"\1", text)
+    words = intra.split()
+    norm = _norm_aligned(words)
     out: list[str] = []
-    collapsed = False
+    collapsed = intra != text
     i = 0
     while i < len(words):
-        j = i + 1
-        while j < len(words) and norm[j] == norm[i]:
-            j += 1
-        run = j - i
-        if run >= _LOOP_RUN_MIN and len(norm[i]) <= _LOOP_TOKEN_MAXLEN:
-            out.append(words[i])
+        period, repeats = _cycle_run(norm, i)
+        if period:
+            out.extend(words[i : i + period])  # giữ đúng 1 chu kỳ
+            i += period * repeats
             collapsed = True
         else:
-            out.extend(words[i:j])
-        i = j
+            out.append(words[i])
+            i += 1
     if not collapsed:
         return text  # không có loop → trả nguyên văn, không đụng khoảng trắng
     # mlx nối segment bằng "".join → phải giữ khoảng trắng đầu/cuối của segment.
     lead = text[: len(text) - len(text.lstrip())]
     trail = text[len(text.rstrip()) :]
     return f"{lead}{' '.join(out)}{trail}"
+
+
+def is_hallucination_phrase(text: str) -> bool:
+    """Câu chứa cụm outro YouTube Whisper hay bịa khi noise/im lặng (đăng ký
+    kênh, thanks for watching…). Dùng cho cả rà hậu kỳ toàn văn (app.cleanup)."""
+    return bool(_HALLUCINATION_RE.search(text))
+
+
+def strip_hallucination_phrases(text: str) -> tuple[str, list[str]]:
+    """Cắt ĐÚNG cụm outro YouTube khỏi văn bản (không đụng nội dung quanh nó —
+    transcript hầu như không có dấu câu nên cắt theo câu sẽ mất đoạn thật). Trả
+    (văn bản đã cắt, danh sách cụm đã cắt). Khoảng trắng dư sau khi cắt được thu gọn."""
+    removed = [m.group(0) for m in _HALLUCINATION_RE.finditer(text)]
+    if not removed:
+        return text, []
+    stripped = _HALLUCINATION_RE.sub(" ", text)
+    return re.sub(r"\s{2,}", " ", stripped).strip(), removed
 
 
 def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:

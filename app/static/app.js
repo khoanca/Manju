@@ -402,6 +402,8 @@ function applyView(){
   $("goldenBtn").style.display = editedText != null ? "" : "none";
   $("goldenBtn").textContent = goldenFlag ? "Bỏ đánh dấu chuẩn" : "Dùng làm chuẩn đo";
   $("editHint").style.display = curView === "raw" ? "none" : "";
+  // Rà lặp/nhiễu chỉ áp cho bản sửa được (pass 2 / sửa tay), không cho bản máy thô.
+  $("reviewFix").style.display = curView === "raw" ? "none" : "";
   updateSaveBtn();
 }
 $("toggleRaw").onclick = () => {
@@ -475,6 +477,25 @@ $("goldenBtn").onclick = async () => {
     goldenFlag = j.golden;
     applyView();
   } catch (e) { alert("Lỗi đánh dấu bản chuẩn: " + e.message); }
+  finally { b.disabled = false; }
+};
+// Rà & sửa lặp/nhiễu toàn văn (hậu kỳ) — Whisper hay lặp cụm/token khi có noise.
+// Endpoint trả BẢN XEM TRƯỚC, không tự lưu: đổ vào ô soạn để người dùng soát rồi
+// bấm "Lưu bản sửa" (patchText giữ base_text → vẫn chống ghi đè chéo).
+$("reviewFix").onclick = async () => {
+  if (!curDetailId) return;
+  const b = $("reviewFix"); b.disabled = true;
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/review-fix`, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    if (!j.changed){ alert("Không tìm thấy đoạn lặp/nhiễu nào để sửa."); return; }
+    $("result").value = j.cleaned;
+    updateSaveBtn();
+    alert("Đã gom lặp/nhiễu: cắt " + j.chars_removed + " ký tự"
+      + (j.dropped.length ? ", bỏ " + j.dropped.length + " cụm nhiễu" : "")
+      + ".\nSoát lại rồi bấm Lưu bản sửa để áp.");
+  } catch (e) { alert("Lỗi rà sửa: " + e.message); }
   finally { b.disabled = false; }
 };
 
