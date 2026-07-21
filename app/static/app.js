@@ -89,6 +89,9 @@ async function loadServerSettings(){
     // US-818: ô hashtag chỉ hiện khi server có APIFY_TOKEN
     $("slangHashtagsRow").classList.toggle("hidden", !s.apify_enabled);
     if (document.activeElement !== $("slangHashtags")) $("slangHashtags").value = s.slang_hashtags || "";
+    // Lớp B/C: toggle tự đoán ngành + danh sách ngành để research
+    $("domainAuto").checked = s.domain_auto !== false;
+    populateDomainPick(s.domains || []);
     syncLexBtn();
   } catch { $("engineVal").textContent = "—"; }
 }
@@ -766,6 +769,42 @@ $("slangTrend").onclick = async () => {
     $("corrStatus").value = "pending"; $("corrSource").value = "trend";
     loadCorrections();
   } catch (e) { alert("Lỗi cập nhật tiếng lóng: " + e.message); }
+  btn.disabled = false;
+};
+// ── Lớp B/C: tự đoán ngành + research thuật ngữ ngành ──────────────────────
+function populateDomainPick(domains){
+  const sel = $("domainPick");
+  if (sel.options.length === domains.length && domains.length) return;  // đã fill
+  sel.innerHTML = "";
+  for (const d of domains){
+    const o = document.createElement("option"); o.value = d; o.textContent = d;
+    sel.appendChild(o);
+  }
+}
+$("domainAuto").addEventListener("change", async () => {
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain_auto: $("domainAuto").checked }),
+    });
+    if (!r.ok) throw new Error(r.statusText);
+  } catch (e) { $("domainAuto").checked = !$("domainAuto").checked; alert("Lỗi bật/tắt đoán ngành: " + e.message); }
+});
+$("domainResearch").onclick = async () => {
+  const btn = $("domainResearch"), domain = $("domainPick").value;
+  if (!domain) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/lexicon/domain-research", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    alert(`Đã thêm ${d.new_pending} thuật ngữ «${domain}» chờ duyệt (bỏ qua ${d.skipped}).`);
+    $("corrStatus").value = "pending"; $("corrSource").value = "trend";
+    loadCorrections();
+  } catch (e) { alert("Lỗi research thuật ngữ ngành: " + e.message); }
   btn.disabled = false;
 };
 async function refreshSlangBadge(){

@@ -116,6 +116,8 @@ class SettingsIn(BaseModel):
     flag_words: bool | None = None
     live_ident: bool | None = None
     denoise_enabled: bool | None = None
+    # Lớp B: tự đoán ngành + nạp lexicon ngành khi transcribe (mặc định bật)
+    domain_auto: bool | None = None
 
 
 # Field SettingsIn / key settings → vùng seed lexicon (app/data/lexicon/{region}.json)
@@ -157,6 +159,8 @@ def api_settings():
         "flag_words": db.get_setting("flag_words", "0") == "1",
         "live_ident": db.get_setting("live_ident", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
+        "domain_auto": db.get_setting("domain_auto", "1") == "1",
+        "domains": list(corrections.DOMAINS),
     }
 
 
@@ -193,6 +197,8 @@ def api_settings_put(body: SettingsIn):
         db.set_setting("live_ident", "1" if body.live_ident else "0")
     if body.denoise_enabled is not None:
         db.set_setting("denoise_enabled", "1" if body.denoise_enabled else "0")
+    if body.domain_auto is not None:
+        db.set_setting("domain_auto", "1" if body.domain_auto else "0")
     return {
         "audio_dir": str(db.get_audio_dir()),
         "diarize_enabled": transcribe.diarize_enabled(),
@@ -201,6 +207,7 @@ def api_settings_put(body: SettingsIn):
         "flag_words": db.get_setting("flag_words", "0") == "1",
         "live_ident": db.get_setting("live_ident", "0") == "1",
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
+        "domain_auto": db.get_setting("domain_auto", "1") == "1",
     }
 
 
@@ -476,6 +483,33 @@ def api_lexicon_update():
     except corrections.LexiconError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"ok": True, "imported": corrections.import_remote(entries)}
+
+
+@app.get("/api/domains")
+def api_domains():
+    """Danh sách ngành có seed lexicon (Lớp C) — UI hiện nút research/nạp."""
+    return {"domains": list(corrections.DOMAINS)}
+
+
+class DomainResearchIn(BaseModel):
+    domain: str
+
+
+@app.post("/api/lexicon/domain-research")
+def api_domain_research(body: DomainResearchIn):
+    """Lớp C: LLM research thuật ngữ 1 ngành → nhập pending (tag 'dom:{domain}',
+    source 'trend') chờ user duyệt — không tự vào bias."""
+    if body.domain not in corrections.DOMAINS:
+        raise HTTPException(400, f"Ngành không hợp lệ (chọn trong {corrections.DOMAINS})")
+    if not correct.openrouter_enabled():
+        raise HTTPException(
+            503, "Chưa cấu hình OPENROUTER_API_KEY — research ngành cần LLM cloud"
+        )
+    try:
+        res = slang_trend.run_domain_research(body.domain)
+    except Exception as exc:  # noqa: BLE001 — mạng/LLM lỗi → 502 cho client biết
+        raise HTTPException(502, f"Không research được ngành: {exc}") from exc
+    return {"ok": True, "new_pending": res.new_pending, "skipped": res.skipped}
 
 
 @app.post("/api/lexicon/slang-trend")

@@ -1,0 +1,12 @@
+[
+  {"wrong": "com plai ần", "right": "compliance"},
+  {"wrong": "li ti ghê sần", "right": "litigation"},
+  {"wrong": "con trác", "right": "contract"},
+  {"wrong": "li a bi li ti", "right": "liability"},
+  {"wrong": "ni đi ây", "right": "NDA"},
+  {"wrong": "gia rít đích sần", "right": "jurisdiction"},
+  {"wrong": "in tô léc tù eo", "right": "intellectual property"},
+  {"wrong": "oa răn ti", "right": "warranty"},
+  {"wrong": "in đem ni ti", "right": "indemnity"},
+  {"wrong": "ạc bi trây sần", "right": "arbitration"}
+]

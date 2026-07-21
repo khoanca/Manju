@@ -1,0 +1,16 @@
+[
+  {"wrong": "rê vê niu", "right": "revenue"},
+  {"wrong": "re ve nheo", "right": "revenue"},
+  {"wrong": "in voi", "right": "invoice"},
+  {"wrong": "in voai", "right": "invoice"},
+  {"wrong": "âu đít", "right": "audit"},
+  {"wrong": "cát phlâu", "right": "cash flow"},
+  {"wrong": "ép bít đa", "right": "EBITDA"},
+  {"wrong": "goát pro phịt", "right": "gross profit"},
+  {"wrong": "mác gin", "right": "margin"},
+  {"wrong": "pho cát", "right": "forecast"},
+  {"wrong": "bát rệt", "right": "budget"},
+  {"wrong": "goóc kinh cáp pi tồ", "right": "working capital"},
+  {"wrong": "va lu ây sần", "right": "valuation"},
+  {"wrong": "li quy đi ti", "right": "liquidity"}
+]

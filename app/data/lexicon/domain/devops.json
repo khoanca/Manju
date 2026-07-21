@@ -1,0 +1,16 @@
+[
+  {"wrong": "cu bơ nét", "right": "Kubernetes"},
+  {"wrong": "cu bơ nét ét", "right": "Kubernetes"},
+  {"wrong": "đíp lôi", "right": "deploy"},
+  {"wrong": "đi ploi", "right": "deploy"},
+  {"wrong": "rôn bách", "right": "rollback"},
+  {"wrong": "công ten nơ", "right": "container"},
+  {"wrong": "mo ni to ring", "right": "monitoring"},
+  {"wrong": "lốt ba lăng xơ", "right": "load balancer"},
+  {"wrong": "pai lai", "right": "pipeline"},
+  {"wrong": "đốc cơ", "right": "Docker"},
+  {"wrong": "rét đít", "right": "Redis"},
+  {"wrong": "sờ ta ging", "right": "staging"},
+  {"wrong": "en pôi", "right": "endpoint"},
+  {"wrong": "lây ten xi", "right": "latency"}
+]

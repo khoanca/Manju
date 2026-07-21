@@ -26,7 +26,7 @@ from urllib import robotparser
 import httpx
 
 from app import correct, db
-from app.corrections import SLANG_TAG
+from app.corrections import SLANG_TAG, domain_tag
 
 TREND_SOURCE = "trend"
 MAX_ENTRIES = 40   # chặn LLM trả danh sách dài bất thường
@@ -270,6 +270,51 @@ def apify_digest() -> tuple[list[tuple[str, str]], int]:
         raise ValueError("Apify không trả về text nào")
     raw = correct.chat_once(_EXTRACT_SYSTEM, _page_prompt(text), timeout=LLM_TIMEOUT_S)
     return _parse_entries(raw)
+
+
+# ── Lớp C: research thuật ngữ NGÀNH bằng LLM → nhập pending ────────────────
+_DOMAIN_SYSTEM = (
+    "Bạn là chuyên gia thuật ngữ chuyên ngành, đang xây từ điển giúp công cụ "
+    "ASR (Whisper) nhận đúng thuật ngữ tiếng Anh khi người Việt NÓI xen trong "
+    'cuộc họp. Trả về DUY NHẤT một JSON array dạng [{"wrong": "...", "right": '
+    '"..."}]: `right` = thuật ngữ tiếng Anh chuẩn của ngành; `wrong` = cách '
+    "Whisper nhiều khả năng phiên âm SAI khi nghe người Việt đọc thuật ngữ đó "
+    "(âm tiết tiếng Việt gần giống cách đọc). CHỈ lấy thuật ngữ hay được NÓI "
+    "thành tiếng trong họp. Mỗi bên tối đa 4 từ. Tối đa 30 cặp. Không markdown."
+)
+
+
+def domain_digest(domain: str) -> tuple[list[tuple[str, str]], int]:
+    """Hỏi LLM thuật ngữ tiếng Anh phổ biến của 1 ngành + cách Whisper nghe nhầm.
+    Lỗi mạng/JSON → raise (caller xử). Cần OpenRouter (chat_once không fallback)."""
+    user = (
+        f"Liệt kê thuật ngữ tiếng Anh ngành «{domain}» mà người Việt hay nói xen "
+        "tiếng Việt trong cuộc họp, kèm cách Whisper dễ nghe nhầm khi phiên âm."
+    )
+    raw = correct.chat_once(_DOMAIN_SYSTEM, user, timeout=LLM_TIMEOUT_S)
+    return _parse_entries(raw)
+
+
+def run_domain_research(domain: str) -> TrendResult:
+    """Research 1 ngành → nhập DB pending (tag 'dom:{domain}', source 'trend').
+    User duyệt xong mới vào bias. INSERT OR IGNORE — bấm lại an toàn."""
+    pairs, skipped = domain_digest(domain)
+    uniq: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for w, r in pairs:
+        key = (w.casefold(), r.casefold())
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        uniq.append((w, r))
+    added = db.add_corrections_ignore(
+        [(w, r, domain_tag(domain)) for w, r in uniq],
+        source=TREND_SOURCE,
+        status="pending",
+    )
+    skipped += len(uniq) - added
+    return TrendResult(added, skipped, sources_ok=1, sources_skipped=0)
 
 
 def run_trend_update() -> TrendResult:

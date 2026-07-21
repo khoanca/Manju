@@ -643,6 +643,14 @@
         <div class="corr-update hidden" id="slangHashtagsRow">
           <input id="slangHashtags" placeholder="Hashtag TikTok quét qua Apify (mặc định: xuhuong)…" />
         </div>
+        <div class="corr-seed" id="domainAutoRow">
+          <small>Ngành nghề:</small>
+          <label><input type="checkbox" id="domainAuto"/> Tự đoán ngành + nạp từ vựng ngành khi tạo bản ghi</label>
+        </div>
+        <div class="corr-update">
+          <select id="domainPick" title="Chọn ngành để research thuật ngữ"></select>
+          <button class="mini" id="domainResearch" title="Gọi LLM research thuật ngữ ngành → thêm vào danh sách chờ duyệt (cần OPENROUTER_API_KEY)">Research thuật ngữ ngành</button>
+        </div>
         <div class="corr-filters">
           <select id="corrStatus" title="Trạng thái">
             <option value="">Tất cả</option>

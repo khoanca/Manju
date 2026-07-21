@@ -96,17 +96,23 @@ def _add_personal(out: str, seen: set[str], personal: Sequence[str]) -> str:
 SLANG_TAG = "slang"
 
 
-def _eligible_tags(regions: Collection[str]) -> frozenset[str]:
-    """Tag xếp tier ưu tiên khi có vùng active; regions=() → rỗng như cũ
-    (mọi tag đồng hạng, slang KHÔNG được nhảy lên trên cặp user count cao)."""
-    return frozenset({*regions, SLANG_TAG}) if regions else frozenset()
+def _eligible_tags(regions: Collection[str], domains: Collection[str] = ()) -> frozenset[str]:
+    """Tag xếp tier ưu tiên khi có vùng/ngành active; regions=() và domains=()
+    → rỗng như cũ (mọi tag đồng hạng, slang KHÔNG được nhảy lên trên cặp user
+    count cao). Ngành đưa vào dưới dạng tag đã prefix (`domain_tag`)."""
+    dom_tags = {domain_tag(d) for d in domains}
+    if not regions and not dom_tags:
+        return frozenset()
+    return frozenset({*regions, *dom_tags, SLANG_TAG})
 
 
-def _rank_rows(rows: list[dict], topic: str, regions: Collection[str]) -> list[dict]:
-    """Stable sort: tag khớp vùng miền (slang tính là khớp) trước, rồi term
-    xuất hiện trong topic; còn lại giữ nguyên count DESC/updated_at DESC từ DB."""
+def _rank_rows(
+    rows: list[dict], topic: str, regions: Collection[str], domains: Collection[str] = ()
+) -> list[dict]:
+    """Stable sort: tag khớp vùng miền/ngành (slang tính là khớp) trước, rồi
+    term xuất hiện trong topic; còn lại giữ nguyên count DESC/updated_at DESC."""
     topic_cf = topic.casefold()
-    eligible = _eligible_tags(regions)
+    eligible = _eligible_tags(regions, domains)
     return sorted(rows, key=lambda r: (
         r["tag"] not in eligible,
         not (topic_cf and r["right"].strip().casefold() in topic_cf),
@@ -118,12 +124,14 @@ def build_bias(
     personal: Sequence[str] = (),
     topic: str = "",
     regions: Collection[str] = (),
+    domains: Collection[str] = (),
 ) -> str:
     """Glossary hiệu lực cho ASR: (1) glossary user giữ nguyên đứng trước —
     KHÔNG bao giờ bị cắt; (2) term cá nhân theo người nói (sub-cap
     PERSONAL_CAP_CHARS); (3) term `right` approved từ thư viện, re-rank
-    vùng miền > topic > count (`_rank_rows`), dừng khi vượt BIAS_CAP_CHARS.
-    Dedup casefold xuyên suốt. Lỗi DB → user + personal (never-fail, US-803 AC2).
+    vùng miền/ngành > topic > count (`_rank_rows`), dừng khi vượt
+    BIAS_CAP_CHARS. `domains` = ngành nghề dự đoán (Lớp B) → term ngành nổi lên
+    đầu bias. Dedup casefold xuyên suốt. Lỗi DB → user + personal (never-fail).
     """
     out = user_glossary.strip()
     seen = {t.strip().casefold() for t in out.split(",") if t.strip()}
@@ -132,7 +140,7 @@ def build_bias(
         rows = db.list_corrections(status="approved")
     except Exception:  # noqa: BLE001 — thư viện hỏng không được chặn transcribe
         return out
-    for row in _rank_rows(rows, topic, regions):
+    for row in _rank_rows(rows, topic, regions, domains):
         term = row["right"].strip()
         if not term or term.casefold() in seen:
             continue
@@ -144,15 +152,17 @@ def build_bias(
     return out
 
 
-def top_pairs(limit: int = 20, regions: Collection[str] = ()) -> list[tuple[str, str]]:
+def top_pairs(
+    limit: int = 20, regions: Collection[str] = (), domains: Collection[str] = ()
+) -> list[tuple[str, str]]:
     """Cặp (sai → đúng) approved gặp nhiều nhất — few-shot cho prompt pass 2.
-    Tag khớp `regions` xếp trước (stable) RỒI mới cắt limit. Lỗi DB → []
-    (never-fail, US-803 AC2)."""
+    Tag khớp `regions`/`domains` xếp trước (stable) RỒI mới cắt limit. Lỗi DB →
+    [] (never-fail, US-803 AC2)."""
     try:
         rows = db.list_corrections(status="approved")
     except Exception:  # noqa: BLE001
         return []
-    eligible = _eligible_tags(regions)
+    eligible = _eligible_tags(regions, domains)
     ranked = sorted(rows, key=lambda r: r["tag"] not in eligible)
     return [(r["wrong"], r["right"]) for r in ranked[:limit]]
 
@@ -291,3 +301,67 @@ def import_remote(entries: list[dict]) -> int:
         for e in entries
     ]
     return db.add_corrections_ignore(rows, source="remote")
+
+
+# ── Lexicon từ vựng NGÀNH (Lớp C) ──────────────────────────────────────────
+# Tag ngành prefix "dom:" tách bạch hẳn tag vùng miền (bac|trung|nam|...) trong
+# cùng cột `corrections.tag`: một cặp có thể trùng term vùng miền lẫn ngành mà
+# không lẫn tier ưu tiên. Seed đặt ở data/lexicon/domain/{domain}.json.
+DOMAIN_DIR = LEXICON_DIR / "domain"
+DOMAIN_TAG_PREFIX = "dom:"
+# Ngành hỗ trợ sẵn seed — Lớp B chỉ dự đoán trong tập này; research (Lớp C giai
+# đoạn 2) bổ sung term mới vào chính các tag này.
+DOMAINS = ("devops", "finance", "medical", "legal", "marketing")
+
+
+def domain_tag(domain: str) -> str:
+    """Tên tag lưu DB cho 1 ngành (prefix để không lẫn tag vùng miền)."""
+    return f"{DOMAIN_TAG_PREFIX}{domain.strip()}"
+
+
+def is_domain_tag(tag: str) -> bool:
+    return tag.startswith(DOMAIN_TAG_PREFIX)
+
+
+def import_domain_seed(domain: str) -> int:
+    """Nạp lexicon ngành `domain` vào corrections (source='seed',
+    tag='dom:{domain}', approved). INSERT OR IGNORE như import_seed vùng miền —
+    chạy lại không nhân đôi. Trả số entry thêm mới."""
+    raw = (DOMAIN_DIR / f"{domain}.json").read_text(encoding="utf-8")
+    entries = _validate_entries(json.loads(raw))
+    return db.add_corrections_ignore(
+        [(e["wrong"].strip(), e["right"].strip(), domain_tag(domain)) for e in entries],
+        source="seed",
+    )
+
+
+def remove_domain_seed(domain: str) -> int:
+    """Gỡ toàn bộ entry seed của 1 ngành — không đụng entry user/remote/trend."""
+    return db.delete_corrections(source="seed", tag=domain_tag(domain))
+
+
+def ensure_domains(domains: Collection[str]) -> int:
+    """Nạp seed lexicon cho các ngành đang active (idempotent, INSERT OR IGNORE).
+    Gọi khi Lớp B đoán ra ngành → term ngành có mặt trong thư viện để build_bias/
+    top_pairs dùng. Bỏ ngành lạ/file hỏng. Never-fail. Trả tổng entry thêm mới."""
+    total = 0
+    for d in domains:
+        if d not in DOMAINS:
+            continue
+        try:
+            total += import_domain_seed(d)
+        except (OSError, ValueError, LexiconError):
+            continue
+    return total
+
+
+def domain_seed_pairs(domain: str) -> list[tuple[str, str]]:
+    """Cặp (wrong, right) trong seed 1 ngành — Lớp B dùng cả 2 dạng làm tín hiệu
+    (khớp được text thô Whisper-phiên-sai LẪN text đã sửa). File thiếu/hỏng → []
+    (never-fail, dự đoán ngành không được sập)."""
+    try:
+        raw = (DOMAIN_DIR / f"{domain}.json").read_text(encoding="utf-8")
+        entries = _validate_entries(json.loads(raw))
+    except (OSError, ValueError, LexiconError):
+        return []
+    return [(e["wrong"].strip(), e["right"].strip()) for e in entries]

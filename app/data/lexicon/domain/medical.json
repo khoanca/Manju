@@ -1,0 +1,13 @@
+[
+  {"wrong": "đai a be tít", "right": "diabetes"},
+  {"wrong": "hai pơ ten sần", "right": "hypertension"},
+  {"wrong": "đai ắc nô sịt", "right": "diagnosis"},
+  {"wrong": "prét cợ ríp sần", "right": "prescription"},
+  {"wrong": "vác xin", "right": "vaccine"},
+  {"wrong": "sim tơm", "right": "symptom"},
+  {"wrong": "en ti bai ô tíc", "right": "antibiotic"},
+  {"wrong": "ai xiu", "right": "ICU"},
+  {"wrong": "sờ ke nờ", "right": "scanner"},
+  {"wrong": "ken sơ", "right": "cancer"},
+  {"wrong": "đô sịt", "right": "dosage"}
+]
