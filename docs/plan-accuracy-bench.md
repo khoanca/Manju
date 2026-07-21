@@ -43,6 +43,25 @@ Ghi chú T-006: gộp vào `tests/test_accuracy_api.py` (gồm cả test migrati
 - Smoke server thật: `/` phục vụ đủ `#goldenBtn`/`#goldenBadge`/`#editHint`; `PATCH .../golden` trả 404 với id sai, 400 khi chưa sửa tay (thử trên bản ghi thật `20260720-142230-live-1418`), DB không đổi.
 - **Chưa chạy được số thật**: cần user tạo bản chuẩn trước. Đây là đường găng đã nêu.
 
+## Số đo thật đầu tiên (2026-07-21, 3 bản có `edited_text`)
+
+Chuẩn = `edited_text`. Đo bằng `app/accuracy`:
+
+| bản ghi | dài | WER raw | WER pass 2 | pass 2 đụng | phá chỗ vốn đúng |
+|---|---|---|---|---|---|
+| 07-17 live-1510 | 36ph | 0.025 | **0.003** | 145 token | 0 |
+| 07-20 live-1418 | 3.7ph | 0.395 | 0.377 | 12 token | 0 |
+| 07-20 live-1748 | 53s | 0.042 | 0.042 | 2 token | 0 |
+
+**Kết luận, ngược với nghi ngờ ban đầu:** pass 2 net-GIÚP, chưa từng phá token vốn đúng (0/3). Trên 1510 nó sửa đúng 145 token, hạ WER ~10×. Bản "tệ" 1418 là lỗi ASR thô (chuỗi `để để…` ~200 lần, đã vá ở `438d4f3`), không phải pass 2.
+
+**Khiếm khuyết thật của pass 2:** bịa ~1 thuật ngữ/bản ghi ở chỗ ASR nghe không rõ — `doanh thu`→`budget`, xác nhận bằng A/B feed raw_text (prompt cũ bịa 2/6, không phụ thuộc `context`/glossary — cả hai đều rỗng ở 1748). Tần suất thấp nhưng độc: từ bịa vào `text`/`segments` → đầu độc `summarize_topic`, keyword search, và **tự khuếch đại** qua `mine_speaker_terms` → bias phiên sau.
+
+**Đã sửa (không đợi T-009):**
+- `corrections.mine_speaker_terms` chỉ giữ term chứng thực trong `raw_text`/`edited_text` (`_attested_vocab`) — cắt vòng tự khuếch đại. Đánh đổi: cũng bỏ term pass-2-sửa-đúng-nhưng-mờ (`đây ta`→`data`); chấp nhận vì hại cộng dồn ≫ lợi cộng dồn.
+- `correct._SYSTEM_PROMPT` thêm đường lui "không chắc phát âm thì giữ nguyên" — A/B raw hạ bịa `budget` 2/6→0/6, `Kubernetes`/`deploy`/`SQL` vẫn sửa đúng.
+- **Còn nợ (đúng tầm plan-feature):** pass 2 ghi lại chính xác nó đổi gì (span + độ gần âm) để UI duyệt + summary/mining/keyword loại chỗ chưa xác nhận — fix triệt để cho harm summary/keyword *trong cùng cuộc*.
+
 ## User Stories
 
 - **US-819** — Đánh dấu bản chuẩn: user sửa transcript cho đúng rồi đánh dấu "dùng làm chuẩn đo", để bộ đo biết bản nào tin được.

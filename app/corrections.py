@@ -239,12 +239,27 @@ def _salient_terms(text: str, known: set[str]) -> Counter[str]:
     return Counter({first_seen[cf]: n for cf, n in counts.items()})
 
 
+def _attested_vocab(data: dict) -> set[str] | None:
+    """Tập token (casefold) được CHỨNG THỰC: có trong `raw_text` (Whisper thật
+    sự nghe được) hoặc `edited_text` (user sửa tay). `segments` lưu bản SAU pass
+    2 — LLM đôi khi bịa thuật ngữ ở chỗ nghe không rõ (VD 'doanh thu'→'budget'),
+    không được để cụm bịa đó bootstrap vào bias phiên sau (vòng tự khuếch đại).
+    Trả None nếu không có nguồn chứng thực nào → caller không lọc (giữ hành vi cũ,
+    never-fail cho transcript cũ thiếu raw_text)."""
+    sources = [str(data[k]) for k in ("raw_text", "edited_text") if data.get(k)]
+    if not sources:
+        return None
+    return {tok.casefold() for src in sources for tok in _salient_terms(src, set())}
+
+
 def mine_speaker_terms(transcript_id: str) -> int:
     """Mine term đặc trưng theo người nói từ 1 transcript đã gán tên: gom text
-    segment theo speaker_map (bỏ cụm chưa gán), giữ term count ≥ MIN_TERM_COUNT
-    hoặc đã có trong thư viện approved, top MAX_TERMS_PER_SPEAKER mỗi người,
-    ghi đè qua db.replace_speaker_terms. Trả tổng số hàng ghi; transcript
-    không có/không segment → 0. Never-fail (hook không được chặn API)."""
+    segment theo speaker_map (bỏ cụm chưa gán), CHỈ giữ term được chứng thực
+    trong raw_text/edited_text (chặn term pass 2 bịa — xem `_attested_vocab`),
+    count ≥ MIN_TERM_COUNT hoặc đã có trong thư viện approved, top
+    MAX_TERMS_PER_SPEAKER mỗi người, ghi đè qua db.replace_speaker_terms. Trả
+    tổng số hàng ghi; transcript không có/không segment → 0. Never-fail (hook
+    không được chặn API)."""
     try:
         data = db.read_transcript(transcript_id)
         if not data or not data.get("segments"):
@@ -258,11 +273,13 @@ def mine_speaker_terms(transcript_id: str) -> int:
         known = {
             r["right"].strip().casefold() for r in db.list_corrections(status="approved")
         }
+        attested = _attested_vocab(data)
         rows: list[tuple[str, str, int]] = []
         for sid, chunks in texts.items():
             counts = _salient_terms(" ".join(chunks), known)
             kept = [(term, n) for term, n in counts.most_common()
-                    if n >= MIN_TERM_COUNT or term.casefold() in known]
+                    if (n >= MIN_TERM_COUNT or term.casefold() in known)
+                    and (attested is None or term.casefold() in attested)]
             rows += [(sid, term, n) for term, n in kept[:MAX_TERMS_PER_SPEAKER]]
         return db.replace_speaker_terms(transcript_id, rows)
     except Exception:  # noqa: BLE001

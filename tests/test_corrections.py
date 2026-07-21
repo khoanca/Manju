@@ -467,6 +467,24 @@ def test_mine_speaker_terms_known_kept_at_count_one(tmp_db):
     assert set(db.personal_terms([a])) == {"redis", "cache"}
 
 
+def test_mine_speaker_terms_drops_pass2_invention(tmp_db):
+    # segments (bản sau pass 2) có 'budget' ×2, nhưng raw_text (Whisper thật)
+    # chỉ có 'redis' — 'budget' là LLM bịa, không được vào bias phiên sau.
+    a = db.find_or_create_speaker("An")
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="t-inv", title="Họp", language="vi", model="m", duration=6.0,
+        created_at="2026-01-01T00:00:00+07:00", text="x",
+        raw_text="dùng redis rồi redis nữa còn doanh thu thì doanh thu sau",
+        segments=[
+            {"start": 0.0, "end": 3.0, "text": "dùng redis rồi redis nữa", "spk": 0},
+            {"start": 3.0, "end": 6.0, "text": "còn budget thì budget sau", "spk": 0},
+        ],
+        llm_model=None, audio_file=None, audio_dir=None, speaker_map={"0": a},
+    ))
+    assert mine_speaker_terms("t-inv") == 1
+    assert db.personal_terms([a]) == ["redis"]
+
+
 def test_mine_speaker_terms_missing_or_no_segments_returns_zero(tmp_db):
     assert mine_speaker_terms("khong-ton-tai") == 0
     db.insert_transcript(db.TranscriptRecord(
