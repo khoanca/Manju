@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import corrections, db, diarize, domain, engines, memory_filter
+from app import corrections, db, denoise, diarize, domain, engines, memory_filter
 from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
@@ -128,11 +128,24 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
     # US-812: bật word_timestamps để giữ per-word confidence vào segment (gạch đỏ
     # từ khả nghi trên bản upload) — cùng setting với live.
     flag_words = db.get_setting("flag_words", "0") == "1"
-    result = engine.transcribe_file(
-        audio_path,
-        engines.DecodeSpec(spec.language, glossary, override, flag_words=flag_words),
-        lambda text, p: _update(job_id, text=text, progress=p),
-    )
+    # T-004: khử ồn CHỈ cho bản đưa vào ASR — never-fail, reduce_file tự nuốt lỗi
+    # trả None → fallback bản gốc. Bất biến: audio_path gốc dùng cho diarize + lưu.
+    den: Path | None = None
+    if db.get_setting("denoise_upload_enabled", "0") == "1" and denoise.available():
+        try:
+            den = denoise.reduce_file(audio_path, denoise.params_from_settings())
+        except Exception:  # noqa: BLE001 — khử ồn hỏng không được chặn job
+            den = None
+    asr_path = den if den is not None else audio_path
+    try:
+        result = engine.transcribe_file(
+            asr_path,
+            engines.DecodeSpec(spec.language, glossary, override, flag_words=flag_words),
+            lambda text, p: _update(job_id, text=text, progress=p),
+        )
+    finally:
+        if den is not None:
+            den.unlink(missing_ok=True)
     # Lớp B: đoán ngành từ bản thô để nạp lexicon ngành cho pass 2 (Lớp C).
     # Tắt được qua setting domain_auto (mặc định bật) — họp không rõ ngành thì
     # tránh ép lexicon lạ.

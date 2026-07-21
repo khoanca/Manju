@@ -276,7 +276,9 @@ class LiveSession:
         self._denoiser: denoise.StreamDenoiser | None = None
         try:
             if _setting_on("denoise_enabled") and denoise.available():
-                self._denoiser = denoise.StreamDenoiser(SAMPLE_RATE)
+                self._denoiser = denoise.StreamDenoiser(
+                    SAMPLE_RATE, denoise.params_from_settings()
+                )
         except Exception:  # noqa: BLE001 — denoise hỏng thì chạy raw
             self._denoiser = None
         self._clean = np.zeros(0, dtype=np.float32)
