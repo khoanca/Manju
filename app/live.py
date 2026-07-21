@@ -24,7 +24,7 @@ import numpy as np
 from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from app import corrections, db, denoise, diarize, engines, transcribe
+from app import corrections, db, denoise, diarize, engines, memory_filter, transcribe
 from app.correct import LlmOpts, correct_sentence, openrouter_enabled, summarize_topic
 
 SAMPLE_RATE = 16000
@@ -189,6 +189,8 @@ class LiveSession:
             regions=self._regions,
         )
         self.pairs = tuple(corrections.top_pairs(10, regions=self._regions))
+        # Lớp A: ký ức bản dịch cũ — chốt lúc start, thay xác định trước pass 2.
+        self.memory = memory_filter.from_library()
         self.correct_enabled = bool(cfg.get("correct", True))
         # Client mỏng (PWA) tự giữ audio trong OPFS trên thiết bị → server
         # không ghi WAV (PRD FR-4).
@@ -616,7 +618,10 @@ class LiveSession:
             item = self.correction_q.get()
             if item is None:
                 return
-            utt, text, uncertain = item
+            utt, orig, uncertain = item
+            # Lớp A: thay xác định các cụm đã biết từ ký ức trước khi gọi LLM.
+            text, _ = memory_filter.apply_memory(orig, self.memory)
+            self.sentences[utt] = text
             # Ngữ cảnh đang diễn ra (topic + câu gần nhất, US-805): LLM đoán
             # thuật ngữ theo mạch cuộc họp ("can ban che quýt" → "kanban checklist").
             context = self.tracker.context()
@@ -631,10 +636,11 @@ class LiveSession:
                     uncertain=uncertain,
                 ),
             )
-            changed = ok and fixed != text
-            if changed:
-                self.sentences[utt] = fixed
-            self._send({"type": "corrected", "utt": utt, "text": fixed, "changed": changed})
+            final = fixed if ok else text
+            self.sentences[utt] = final
+            # "changed" so với bản ASR gốc — ký ức HOẶC pass 2 sửa đều tính.
+            changed = final != orig
+            self._send({"type": "corrected", "utt": utt, "text": final, "changed": changed})
 
     # ── Lưu transcript ────────────────────────────────────────────────────
     def _close_recording(self) -> bytes:

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import corrections, db, diarize, engines
+from app import corrections, db, diarize, domain, engines, memory_filter
 from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
@@ -52,6 +52,7 @@ class TranscriptDraft:
     segments: list[dict] | None = None
     audio_path: Path | None = None
     speaker_map: dict | None = None  # pass 3: {cụm local: speaker_id | null}
+    domain: str | None = None  # Lớp B: ngành nghề dự đoán
 
 
 # ── Quản lý job (in-memory) ───────────────────────────────────────────────
@@ -129,7 +130,12 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         engines.DecodeSpec(spec.language, glossary, override),
         lambda text, p: _update(job_id, text=text, progress=p),
     )
-    full_text, corrected = _maybe_correct(job_id, result.text, spec, glossary)
+    # Lớp B: đoán ngành từ bản thô để nạp lexicon ngành cho pass 2 (Lớp C).
+    # Tắt được qua setting domain_auto (mặc định bật) — họp không rõ ngành thì
+    # tránh ép lexicon lạ.
+    domain_on = spec.correct and db.get_setting("domain_auto", "1") == "1"
+    domains = domain.active_domains(result.text) if domain_on else ()
+    full_text, corrected = _maybe_correct(job_id, result.text, spec, domains)
     segments, speaker_map = _maybe_diarize(job_id, audio_path, result.segments)
     transcript_id = save_transcript(TranscriptDraft(
         original_name=spec.filename,
@@ -142,23 +148,35 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
         speaker_map=speaker_map,
         # Giữ lại file upload gốc để nghe/tải lại (save_transcript sẽ dời đi).
         audio_path=audio_path,
+        domain=domains[0] if domains else None,
     ))
     _update(job_id, status="done", text=full_text, progress=1.0, transcript_id=transcript_id)
 
 
-def _maybe_correct(job_id: str, text: str, spec: JobSpec, glossary: str) -> tuple[str, bool]:
-    """Pass 2: LLM soát lại thuật ngữ tiếng Anh bị phiên âm sai.
-    `glossary` là bản đã merge thư viện (build_bias) — dùng chung với ASR."""
+def _maybe_correct(
+    job_id: str, text: str, spec: JobSpec, domains: tuple[str, ...]
+) -> tuple[str, bool]:
+    """Sửa thuật ngữ theo 2 lớp: (A) ký ức bản dịch cũ thay xác định các cụm đã
+    biết, rồi (Pass 2) LLM soát phần còn lại. `domains` = ngành dự đoán → nạp
+    lexicon ngành vào glossary + few-shot. Trả (text, đã-đổi-so-với-thô)."""
     if not (spec.correct and text):
         return text, False
+    # Lớp A: ký ức bản dịch cũ — thay xác định trước, rẻ + nhất quán.
+    text, mem_hits = memory_filter.correct_from_memory(text)
+    # Lớp C: nạp lexicon các ngành vừa đoán vào thư viện (idempotent, never-fail).
+    corrections.ensure_domains(domains)
+    # Glossary/few-shot hiệu lực = thư viện (build_bias never-fail) + term ngành.
+    glossary = corrections.build_bias(spec.prompt, domains=domains)
     _update(job_id, status="correcting", progress=0.0)
-    return correct_text(
+    fixed, ok = correct_text(
         text,
         glossary=glossary,
         on_progress=lambda p: _update(job_id, progress=p),
-        # Few-shot cặp (sai → đúng) đã duyệt — top_pairs never-fail (US-803).
-        pairs=tuple(corrections.top_pairs()),
+        # Few-shot cặp (sai → đúng) đã duyệt, ưu tiên ngành — never-fail (US-803).
+        pairs=tuple(corrections.top_pairs(domains=domains)),
     )
+    # "Đã đổi" nếu pass 2 chạy được HOẶC ký ức đã thay gì đó — để lưu raw_text.
+    return fixed, ok or mem_hits > 0
 
 
 def diarize_enabled() -> bool:
@@ -223,6 +241,7 @@ def save_transcript(draft: TranscriptDraft) -> str:
         audio_file=audio_name,
         audio_dir=str(audio_dir) if audio_name else None,
         speaker_map=draft.speaker_map,
+        domain=draft.domain,
     ))
     return transcript_id
 
