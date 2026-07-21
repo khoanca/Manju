@@ -518,6 +518,121 @@ function applySegmentEdit(s, val){
   if (replaced != null){ $("result").value = replaced; updateSaveBtn(); }
   // không thấy chuỗi gốc trong bản full → giữ sửa ở segment, bỏ qua phần áp
 }
+// ── Từ khả nghi: gạch đỏ + popup phương án (segment list + live) ────────────
+// Tín hiệu: probability từ Whisper < 0.5 → suspect. Dùng chung cho cả 2 nơi.
+const SUSPECT_PROB = 0.5;
+let suggPop = null;   // popup đang mở (chỉ 1 tại một thời điểm)
+
+// Tách token Whisper thành khoảng-trắng-đầu + lõi từ + khoảng-trắng-cuối.
+// Giữ nguyên khoảng trắng gốc: nối lại mọi token = text gốc.
+function splitToken(w){
+  const lead = w.match(/^\s*/)[0];
+  const rest = w.slice(lead.length);
+  const trail = rest.match(/\s*$/)[0];
+  return { lead, core: rest.slice(0, rest.length - trail.length), trail };
+}
+function replaceCore(token, core){ const t = splitToken(token); return t.lead + core + t.trail; }
+
+// Dựng span-per-word vào container. wk = mảng làm việc [{w,p}] (bản sao, sửa được).
+// Từ suspect (p<0.5) gạch đỏ + bấm mở popup; khoảng trắng giữ nguyên bằng text node.
+function fillWordSpans(container, wk, onPick){
+  wk.forEach((wd, i) => {
+    const { lead, core, trail } = splitToken(wd.w);
+    if (lead) container.appendChild(document.createTextNode(lead));
+    if (core){
+      const sp = document.createElement("span"); sp.className = "word"; sp.textContent = core;
+      if (wd.p != null && wd.p < SUSPECT_PROB){
+        sp.classList.add("suspect"); sp.title = "Bấm để chọn phương án khác";
+        sp.onclick = (e) => { e.stopPropagation(); onPick(i, sp, core); };
+      }
+      container.appendChild(sp);
+    }
+    if (trail) container.appendChild(document.createTextNode(trail));
+  });
+}
+
+async function fetchSuggest(word, context){
+  try {
+    const r = await fetch("/api/suggest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ word, context: context || "", language: "vi" }),
+    });
+    if (!r.ok) return [];
+    const j = await r.json().catch(() => ({}));
+    return Array.isArray(j.alternatives) ? j.alternatives : [];
+  } catch { return []; }   // never-fail: lỗi mạng → coi như không có gợi ý
+}
+
+function closeSuggPop(){
+  if (!suggPop) return;
+  suggPop.remove(); suggPop = null;
+  document.removeEventListener("mousedown", onSuggDocDown, true);
+  document.removeEventListener("keydown", onSuggKey, true);
+  window.removeEventListener("scroll", closeSuggPop, true);
+  window.removeEventListener("resize", closeSuggPop, true);
+}
+function onSuggDocDown(e){ if (suggPop && !suggPop.contains(e.target)) closeSuggPop(); }
+function onSuggKey(e){ if (e.key === "Escape"){ e.preventDefault(); closeSuggPop(); } }
+// Neo popup theo vị trí từ được bấm (position:fixed → toạ độ viewport); lật lên/kẹp mép.
+function positionSuggPop(pop, anchor){
+  const r = anchor.getBoundingClientRect();
+  const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = Math.min(r.left, vw - pw - 8); left = Math.max(8, left);
+  let top = r.bottom + 6;
+  if (top + ph > vh - 8) top = Math.max(8, r.top - ph - 6);   // hết chỗ dưới → lật lên trên
+  pop.style.left = left + "px"; pop.style.top = top + "px";
+}
+// Mở popup phương án cho từ được bấm. onChoose(newCore) áp lựa chọn.
+function openWordPopup(anchor, word, context, onChoose){
+  closeSuggPop();
+  const pop = document.createElement("div"); pop.className = "sugg-pop";
+  const head = document.createElement("div"); head.className = "sugg-head";
+  head.textContent = `Phương án cho "${word}"`;
+  const list = document.createElement("div"); list.className = "sugg-list";
+  const loading = document.createElement("div"); loading.className = "sugg-loading";
+  loading.textContent = "Đang tìm phương án…";
+  list.appendChild(loading);
+  const free = document.createElement("div"); free.className = "sugg-free";
+  const inp = document.createElement("input"); inp.type = "text"; inp.placeholder = "Nhập từ khác…";
+  const ok = document.createElement("button"); ok.textContent = "Thay";
+  const pick = (val) => { const v = (val || "").trim(); if (!v) return; onChoose(v); closeSuggPop(); };
+  ok.onclick = () => pick(inp.value);
+  inp.onkeydown = (e) => { if (e.key === "Enter"){ e.preventDefault(); pick(inp.value); } };
+  free.append(inp, ok);
+  pop.append(head, list, free);
+  document.body.appendChild(pop);
+  positionSuggPop(pop, anchor);
+  suggPop = pop;
+  // Đăng ký sau tick hiện tại để click mở popup không tự đóng nó.
+  setTimeout(() => {
+    if (suggPop !== pop) return;
+    document.addEventListener("mousedown", onSuggDocDown, true);
+    document.addEventListener("keydown", onSuggKey, true);
+    window.addEventListener("scroll", closeSuggPop, true);
+    window.addEventListener("resize", closeSuggPop, true);
+  }, 0);
+  fetchSuggest(word, context).then(alts => {
+    if (suggPop !== pop) return;   // popup đã bị đóng/thay khi chờ mạng
+    list.innerHTML = "";
+    if (!alts.length){
+      const empty = document.createElement("div"); empty.className = "sugg-empty";
+      empty.textContent = "Không có gợi ý — nhập từ khác bên dưới.";
+      list.appendChild(empty);
+    } else {
+      for (const a of alts){
+        const b = document.createElement("button"); b.className = "sugg-item"; b.textContent = a;
+        b.onclick = () => { onChoose(a); closeSuggPop(); };
+        list.appendChild(b);
+      }
+    }
+    const keep = document.createElement("button"); keep.className = "sugg-item sugg-keep";
+    keep.textContent = "Giữ nguyên"; keep.onclick = () => closeSuggPop();
+    list.appendChild(keep);
+    positionSuggPop(pop, anchor);   // list dài hơn sau khi có gợi ý → neo lại
+  });
+}
+
 function renderSegments(segments){
   const box = $("segList"), btn = $("toggleSegs");
   const wasOpen = box.style.display !== "none";  // giữ trạng thái mở khi vẽ lại (vd sau khi đặt tên)
@@ -540,9 +655,24 @@ function renderSegments(segments){
       chip.onclick = () => assignCluster(s.spk);
       p.append(chip);
     }
-    const span = document.createElement("span"); span.textContent = s.text;
-    span.className = "seg-txt"; span.title = "Bấm để sửa";
-    span.onclick = () => editSegment(s, span);
+    const span = document.createElement("span"); span.className = "seg-txt";
+    if (s.words && s.words.length){
+      // Bản sao làm việc — mỗi lần chọn phương án cập nhật wk rồi dựng lại full text
+      // (an toàn khi sửa nhiều từ trong 1 câu trước khi vẽ lại).
+      const wk = s.words.map(w => ({ w: w.w, p: w.p }));
+      span.title = "Bấm từ gạch đỏ để chọn lại; bấm chữ để sửa cả câu";
+      fillWordSpans(span, wk, (i, sp, core) => {
+        openWordPopup(sp, core, s.text, (chosen) => {
+          wk[i].w = replaceCore(wk[i].w, chosen);
+          applySegmentEdit(s, wk.map(x => x.w).join(""));   // tái dùng: PATCH + học cặp
+          sp.textContent = chosen; sp.classList.remove("suspect"); sp.onclick = null; sp.title = "";
+        });
+      });
+      span.onclick = () => editSegment(s, span);   // bấm vùng chữ thường → sửa cả segment
+    } else {
+      span.textContent = s.text; span.title = "Bấm để sửa";
+      span.onclick = () => editSegment(s, span);
+    }
     p.append(span); box.appendChild(p);
   }
   box.style.display = wasOpen ? "" : "none";
@@ -1123,7 +1253,9 @@ function handleLiveMsg(m){
   } else if (m.type === "final"){
     stopTypewriter(m.utt); const el = subEl(m.utt);
     if (!m.text){ el.remove(); return; }
-    setLine(el, m.text); el.classList.remove("partial"); autoscroll();
+    if (m.words && m.words.length) renderLineWords(el, m.words, m.text);   // có gạch đỏ
+    else setLine(el, m.text);
+    el.classList.remove("partial"); autoscroll();
   } else if (m.type === "corrected" || m.type === "revise"){
     if (m.type === "corrected" && !m.changed) return;
     const el = subs.querySelector(`[data-utt="${m.utt}"]`);
@@ -1147,6 +1279,19 @@ function handleLiveMsg(m){
 function subEl(utt){ let el = subs.querySelector(`[data-utt="${utt}"]`); if (!el){ el = document.createElement("p"); el.className = "line"; el.dataset.utt = utt; subs.appendChild(el); } return el; }
 // Vẽ 1 dòng subtitle: giữ text gốc trong dataset.raw, thêm "Tên: " nếu đã biết người nói.
 function setLine(el, text){ el.dataset.raw = text; el.textContent = el.dataset.spk ? el.dataset.spk + ": " + text : text; }
+// Dòng live có words ([[word,prob],…]): dựng span-per-word, gạch đỏ từ khả nghi.
+// Giữ tên người nói (prefix) + data-utt + data-raw. Chọn phương án → setLine (plain).
+function renderLineWords(el, words, text){
+  const wk = words.map(([w, p]) => ({ w, p }));
+  el.dataset.raw = text; el.textContent = "";
+  if (el.dataset.spk) el.appendChild(document.createTextNode(el.dataset.spk + ": "));
+  fillWordSpans(el, wk, (i, sp, core) => {
+    openWordPopup(sp, core, text, (chosen) => {
+      wk[i].w = replaceCore(wk[i].w, chosen);
+      setLine(el, wk.map(x => x.w).join(""));   // live: chỉ thay trong dòng, lưu khi kết phiên
+    });
+  });
+}
 function startTypewriter(utt, el){ if (tw) stopTypewriter(tw.utt); tw = { utt, el, displayed:"", target:"", timer:setInterval(revealWord, 70) }; }
 function retarget(text){ if (!tw) return; let p = 0; while (p < tw.displayed.length && p < text.length && tw.displayed[p] === text[p]) p++; if (p < tw.displayed.length){ tw.displayed = tw.displayed.slice(0, p); tw.el.textContent = tw.displayed; } tw.target = text; }
 function revealWord(){ if (!tw || tw.displayed.length >= tw.target.length) return; const rest = tw.target.slice(tw.displayed.length); const m = rest.match(/^\s*\S+/); tw.displayed += m ? m[0] : rest; tw.el.textContent = tw.displayed; autoscroll(); }

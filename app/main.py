@@ -471,6 +471,36 @@ def api_delete_correction(correction_id: str):
     return {"ok": True}
 
 
+class SuggestIn(BaseModel):
+    """Body /api/suggest — gợi ý phương án cho 1 từ ASR nghe không chắc."""
+
+    word: str
+    context: str = ""
+    language: str = "vi"
+
+
+@app.post("/api/suggest")
+def api_suggest(body: SuggestIn):
+    """Phương án thay thế cho 1 từ khả nghi (hybrid): tra thư viện corrections
+    trước, thiếu (<3) thì LLM sinh thêm; dedupe casefold giữ thứ tự, bỏ phần tử
+    trùng từ gốc, cap 5. Never-fail — mọi lỗi trả alternatives rỗng."""
+    alts = corrections.suggest_from_library(body.word)
+    if len(alts) < 3:
+        alts += correct.suggest_alternatives(body.word, body.context, body.language)
+    word_cf = body.word.strip().casefold()
+    seen: set[str] = set()
+    out: list[str] = []
+    for alt in alts:
+        cf = alt.strip().casefold()
+        if not cf or cf == word_cf or cf in seen:
+            continue
+        seen.add(cf)
+        out.append(alt)
+        if len(out) >= 5:
+            break
+    return {"alternatives": out}
+
+
 @app.post("/api/lexicon/update")
 def api_lexicon_update():
     """Tải thư viện từ nguồn remote (opt-in, US-804 AC2) — verify sha256 xong

@@ -207,6 +207,88 @@ def test_fw_words_filled_only_when_flag_and_final(monkeypatch):
     assert "word_timestamps" not in model.calls[1]
 
 
+def test_mlx_transcribe_file_emits_segment_words_when_flag_on():
+    calls: list[dict] = []
+
+    def fake_transcribe(audio, **kw):
+        calls.append(kw)
+        return {"segments": [
+            {"start": 0.0, "end": 1.2, "text": " triển khai Kafka",
+             "avg_logprob": -0.3, "no_speech_prob": 0.1,
+             "words": [
+                 {"word": " triển", "probability": 0.95},
+                 {"word": " khai", "probability": 0.88},
+                 {"word": " Kafka", "probability": 0.4123},
+             ]},
+        ]}
+
+    eng = make_mlx_engine(fake_transcribe)
+    spec = engines.DecodeSpec(language="vi", flag_words=True)
+
+    result = eng.transcribe_file("clip.wav", spec, lambda text, p: None)
+
+    assert calls[0]["word_timestamps"] is True
+    assert result.segments[0]["words"] == [
+        {"w": " triển", "p": 0.95},
+        {"w": " khai", "p": 0.88},
+        {"w": " Kafka", "p": 0.412},  # round 3 chữ số
+    ]
+
+
+def test_mlx_transcribe_file_omits_words_when_flag_off():
+    calls: list[dict] = []
+
+    def fake_transcribe(audio, **kw):
+        calls.append(kw)
+        return {"segments": [
+            {"start": 0.0, "end": 1.0, "text": " xin chào",
+             "avg_logprob": -0.3, "no_speech_prob": 0.1},
+        ]}
+
+    eng = make_mlx_engine(fake_transcribe)
+
+    result = eng.transcribe_file("clip.wav", engines.DecodeSpec(language="vi"),
+                                 lambda text, p: None)
+
+    assert calls[0]["word_timestamps"] is False
+    assert "words" not in result.segments[0]
+
+
+def _fw_file_segment(start, end, text, words=None):
+    return SimpleNamespace(
+        start=start, end=end, text=text, avg_logprob=-0.3, no_speech_prob=0.1, words=words
+    )
+
+
+def test_fw_transcribe_file_emits_segment_words_when_flag_on(monkeypatch):
+    words = [
+        SimpleNamespace(word=" triển", probability=0.9),
+        SimpleNamespace(word=" GraphQL", probability=0.3567),
+    ]
+    model = FakeFwModel([_fw_file_segment(0.0, 1.5, " triển GraphQL", words=words)])
+    eng, _ = make_cpu_engine(monkeypatch, model)
+    spec = engines.DecodeSpec(language="vi", flag_words=True)
+
+    result = eng.transcribe_file("clip.wav", spec, lambda text, p: None)
+
+    assert model.calls[0]["word_timestamps"] is True
+    assert result.segments[0]["words"] == [
+        {"w": " triển", "p": 0.9},
+        {"w": " GraphQL", "p": 0.357},
+    ]
+
+
+def test_fw_transcribe_file_omits_words_when_flag_off(monkeypatch):
+    model = FakeFwModel([_fw_file_segment(0.0, 1.0, " xin chào")])
+    eng, _ = make_cpu_engine(monkeypatch, model)
+
+    result = eng.transcribe_file("clip.wav", engines.DecodeSpec(language="vi"),
+                                 lambda text, p: None)
+
+    assert model.calls[0]["word_timestamps"] is False
+    assert "words" not in result.segments[0]
+
+
 def test_decode_matches_decode_scored_text():
     segments = [mlx_segment(" xin chào", -0.4), mlx_segment(" thanks for watching", -0.2)]
     eng = make_mlx_engine(lambda audio, **kw: {"segments": segments})

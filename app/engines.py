@@ -34,7 +34,8 @@ class EngineInfo:
 class FileResult:
     text: str
     duration: float
-    segments: list[dict]  # [{start, end, text}] — cùng shape với segments của live
+    segments: list[dict]  # [{start, end, text, words?}] — cùng shape với segments của live
+    # words (optional, chỉ khi spec.flag_words): [{"w": <từ>, "p": <probability>}] để flag từ khả nghi
 
 
 @dataclass(frozen=True)
@@ -227,6 +228,22 @@ def _fw_scored(segments: Iterable[object], *, with_words: bool) -> DecodeResult:
     )
 
 
+def _mlx_seg_words(seg: dict) -> list[dict]:
+    """Word-level confidence của 1 segment mlx → shape contract {"w","p"} (upload)."""
+    return [
+        {"w": w["word"], "p": round(float(w["probability"]), 3)}
+        for w in seg.get("words", [])
+    ]
+
+
+def _fw_seg_words(seg: object) -> list[dict]:
+    # faster_whisper không ship type stubs (Word) → getattr như _fw_scored.
+    return [
+        {"w": str(getattr(w, "word", "")), "p": round(float(getattr(w, "probability", 0.0)), 3)}
+        for w in (getattr(seg, "words", None) or [])
+    ]
+
+
 class MlxEngine(Engine):
     """mlx-whisper trên GPU Metal — large-v3-turbo 8.4x realtime trên M1,
     thuật ngữ Anh xen tiếng Việt chính xác hơn mọi lựa chọn CPU (benchmark
@@ -285,16 +302,19 @@ class MlxEngine(Engine):
         # Giữ lock suốt file: Metal không share được với decode live. Upload
         # dài sẽ chặn partial của phiên live đang mở — chấp nhận (turbo nhanh).
         with _decode_lock:
-            result = self._transcribe(str(path), spec, final=True)
-        segs = [
-            {
+            result = self._transcribe(str(path), spec, final=True, word_timestamps=spec.flag_words)
+        segs: list[dict] = []
+        for seg in result["segments"]:
+            if not keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0)):
+                continue
+            s: dict = {
                 "start": round(float(seg["start"]), 2),
                 "end": round(float(seg["end"]), 2),
                 "text": collapse_loops(seg["text"]).strip(),
             }
-            for seg in result["segments"]
-            if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
-        ]
+            if spec.flag_words:
+                s["words"] = _mlx_seg_words(seg)
+            segs.append(s)
         text = " ".join(str(s["text"]) for s in segs).strip()
         # mlx không trả duration file — lấy mốc cuối segment (đủ cho metadata).
         duration = float(result["segments"][-1]["end"]) if result["segments"] else 0.0
@@ -398,19 +418,21 @@ class FwEngine(Engine):
             hotwords=spec.glossary or None,
             condition_on_previous_text=False,
             temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            word_timestamps=spec.flag_words,
         )
         duration = float(getattr(info, "duration", 0) or 0)
         parts: list[str] = []
         segs: list[dict] = []
         for seg in segments:
             parts.append(seg.text)
-            segs.append(
-                {
-                    "start": round(float(seg.start), 2),
-                    "end": round(float(seg.end), 2),
-                    "text": seg.text.strip(),
-                }
-            )
+            s: dict = {
+                "start": round(float(seg.start), 2),
+                "end": round(float(seg.end), 2),
+                "text": seg.text.strip(),
+            }
+            if spec.flag_words:
+                s["words"] = _fw_seg_words(seg)
+            segs.append(s)
             progress = min(seg.end / duration, 0.99) if duration else 0.0
             on_progress("".join(parts).strip(), progress)
         return FileResult("".join(parts).strip(), duration, segs)

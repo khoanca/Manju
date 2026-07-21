@@ -152,6 +152,42 @@ def build_bias(
     return out
 
 
+def suggest_from_library(word: str, limit: int = 5) -> list[str]:
+    """Phương án `right` từ thư viện approved cho 1 từ khả nghi. Khớp `wrong`
+    (casefold): exact `wrong == word` ưu tiên trên chứa/được-chứa. Trả list
+    `right` unique, giữ thứ tự count giảm dần (list_corrections đã sort count
+    DESC — sorted theo tier ổn định nên không phá thứ tự đó). Lỗi DB → []
+    (never-fail)."""
+    key = word.strip().casefold()
+    if not key:
+        return []
+    try:
+        rows = db.list_corrections(status="approved")
+    except Exception:  # noqa: BLE001 — thư viện hỏng không được chặn gợi ý
+        return []
+    scored: list[tuple[int, str]] = []
+    for row in rows:
+        wrong = row["wrong"].strip().casefold()
+        if wrong == key:
+            tier = 0
+        elif key in wrong or wrong in key:
+            tier = 1
+        else:
+            continue
+        scored.append((tier, row["right"].strip()))
+    seen: set[str] = set()
+    out: list[str] = []
+    for _, right in sorted(scored, key=lambda s: s[0]):
+        cf = right.casefold()
+        if not right or cf in seen:
+            continue
+        seen.add(cf)
+        out.append(right)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def top_pairs(
     limit: int = 20, regions: Collection[str] = (), domains: Collection[str] = ()
 ) -> list[tuple[str, str]]:

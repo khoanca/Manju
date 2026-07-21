@@ -125,9 +125,12 @@ def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
     # US-803: glossary hiệu lực = glossary user + term approved từ thư viện
     # (build_bias never-fail) — tính 1 lần, dùng cho cả mồi Whisper lẫn pass 2.
     glossary = corrections.build_bias(spec.prompt)
+    # US-812: bật word_timestamps để giữ per-word confidence vào segment (gạch đỏ
+    # từ khả nghi trên bản upload) — cùng setting với live.
+    flag_words = db.get_setting("flag_words", "0") == "1"
     result = engine.transcribe_file(
         audio_path,
-        engines.DecodeSpec(spec.language, glossary, override),
+        engines.DecodeSpec(spec.language, glossary, override, flag_words=flag_words),
         lambda text, p: _update(job_id, text=text, progress=p),
     )
     # Lớp B: đoán ngành từ bản thô để nạp lexicon ngành cho pass 2 (Lớp C).

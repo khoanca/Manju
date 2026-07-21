@@ -12,6 +12,7 @@ hoặc không có key thì rơi về Ollama local.
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import re
 from collections.abc import Callable
@@ -172,6 +173,65 @@ def chat_once(system: str, user: str, timeout: float = TIMEOUT_S) -> str:
     opts = LlmOpts(timeout=timeout)
     with httpx.Client() as client:
         return _chat_openrouter(client, system, user, opts)
+
+
+_SUGGEST_SYSTEM_PROMPT = (
+    "Bạn giúp đoán lại một từ mà ASR nghe không rõ trong transcript cuộc họp kỹ "
+    "thuật tiếng Việt pha thuật ngữ tiếng Anh. Dựa vào ngữ cảnh câu, đưa các cách "
+    "hiểu khả dĩ nhất của từ đó — giữ đúng thuật ngữ tiếng Anh xen tiếng Việt "
+    '(VD: nghe "cu bơ nết" trong ngữ cảnh hạ tầng → "kubernetes"). CHỈ trả về một '
+    'mảng JSON các chuỗi, ví dụ ["kubernetes","cu bơ nết"]. '
+    "Không giải thích, không markdown."
+)
+
+
+def _parse_suggestions(raw: str, n: int) -> list[str]:
+    """Ép output LLM về list chuỗi: json.loads thẳng, fail thì trích mảng `[...]`
+    đầu tiên bằng regex, fail nữa → []. Giữ tối đa n chuỗi non-empty."""
+    text = raw.strip()
+    data: object
+    try:
+        data = json.loads(text)
+    except ValueError:
+        m = re.search(r"\[.*?\]", text, flags=re.DOTALL)
+        if m is None:
+            return []
+        try:
+            data = json.loads(m.group(0))
+        except ValueError:
+            return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for item in data:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+        if len(out) >= n:
+            break
+    return out
+
+
+def suggest_alternatives(
+    word: str, context: str, language: str = "vi", n: int = 3
+) -> list[str]:
+    """Tối đa n cách hiểu khả dĩ cho 1 từ ASR nghe không rõ trong `context`,
+    sinh bởi LLM (giữ thuật ngữ Anh xen Việt đúng ngữ cảnh họp kỹ thuật). Trả
+    list str; MỌI lỗi (LLM tắt/timeout/API/parse hỏng) → [] (never-fail như
+    pass 2)."""
+    word = word.strip()
+    if not word:
+        return []
+    user = (
+        f"Ngôn ngữ chính: {language}\n"
+        f"Câu chứa từ: {context}\n"
+        f"Từ nghe không rõ: {word}\n"
+        f"Đưa tối đa {n} cách hiểu khả dĩ dưới dạng mảng JSON các chuỗi."
+    )
+    try:
+        raw = chat_once(_SUGGEST_SYSTEM_PROMPT, user)
+    except Exception:  # noqa: BLE001 — LLM lỗi thì không gợi ý, không raise
+        return []
+    return _parse_suggestions(raw, n)
 
 
 def _correct_chunk(client: httpx.Client, chunk: str, opts: LlmOpts) -> str:

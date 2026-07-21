@@ -62,6 +62,23 @@ def test_speaker_map_roundtrip(tmp_db):
     assert row["segments"][0]["spk"] == 0
 
 
+def test_segment_words_roundtrip(tmp_db):
+    """US-812: per-word confidence trong segment phải đi nguyên qua DB (JSON tự do,
+    không sanitize) để bản upload gạch đỏ được từ khả nghi."""
+    db.insert_transcript(db.TranscriptRecord(
+        transcript_id="20260101-000000-words", title="Họp", language="vi", model="m",
+        duration=5.0, created_at="2026-01-01T00:00:00+07:00", text="triển khai Kafka",
+        raw_text=None,
+        segments=[{"start": 0.0, "end": 1.2, "text": "triển khai Kafka",
+                   "words": [{"w": "triển", "p": 0.95}, {"w": "Kafka", "p": 0.31}]}],
+        llm_model=None, audio_file=None, audio_dir=None,
+    ))
+    row = db.read_transcript("20260101-000000-words")
+    assert row["segments"][0]["words"] == [
+        {"w": "triển", "p": 0.95}, {"w": "Kafka", "p": 0.31}
+    ]
+
+
 def test_update_speaker_layer_overwrites(tmp_db):
     _insert()
     db.update_speaker_layer(

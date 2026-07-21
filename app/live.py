@@ -499,16 +499,22 @@ class LiveSession:
         utt = self.utt_seq
         uncertain: tuple[str, ...] = ()
         low_conf = False
+        words: list[list[object]] = []
         try:
             res = self.engine.decode_scored(audio, self.spec, final=True)
             text = res.text
             # US-812: word confidence thấp → pass 2 biết chỗ cần soát kỹ.
             uncertain = tuple(w.strip() for w, p in res.words if p < UNCERTAIN_PROB)[:UNCERTAIN_MAX]
             low_conf = bool(text) and res.min_logprob < REVISE_LOGPROB
+            # US-823: gửi (word, prob) để UI gạch đỏ từ khả nghi (p < SUSPECT_PROB).
+            words = [[w, round(float(p), 3)] for w, p in res.words]
         except Exception:  # noqa: BLE001
             text = ""
         # text rỗng (chỉ là noise) → client xoá dòng partial của utt này.
-        self._send({"type": "final", "utt": utt, "text": text})
+        msg: dict[str, object] = {"type": "final", "utt": utt, "text": text}
+        if words:
+            msg["words"] = words
+        self._send(msg)
         if text:
             self.sentences[utt] = text
             self.raw_sentences[utt] = text
