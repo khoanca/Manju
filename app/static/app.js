@@ -81,6 +81,15 @@ async function loadServerSettings(){
       : "Chưa tải model — chạy: uv run python scripts/fetch_diarize_models.py";
     // Toggle "0"/"1" phía server: đánh dấu từ nghe không rõ + khử ồn mic
     for (const [id, key] of Object.entries(SRV_SW)) $(id).classList.toggle("on", s[key] === "1");
+    // T-005: nạp cấu hình khử ồn mở rộng từ object con s.denoise
+    const dn = s.denoise || {};
+    $("dnStrength").value = dn.strength != null ? dn.strength : 100;
+    $("dnStrengthVal").textContent = $("dnStrength").value + "%";
+    $("dnMode").value = dn.mode || "stationary";
+    $("swDnRumble").classList.toggle("on", (dn.highpass || 0) > 0);
+    $("dnHum").value = dn.hum || "off";
+    $("swDnUpload").classList.toggle("on", !!dn.upload_enabled);
+    syncDenoiseAdv();
     // US-804: trạng thái toggle seed lexicon + URL nguồn cập nhật
     const lex = s.lexicon || {};
     for (const [id, key] of Object.entries(LEX_IDS)) $(id).checked = !!lex[key];
@@ -119,6 +128,27 @@ Object.keys(SRV_SW).forEach(id => $(id).onclick = async () => {
     });
   } catch { $(id).classList.toggle("on"); }
 });
+// T-005: khử ồn mở rộng — phần con chỉ hiện khi master swDenoise bật.
+function syncDenoiseAdv(){
+  $("denoiseAdv").classList.toggle("hidden", !$("swDenoise").classList.contains("on"));
+}
+$("swDenoise").addEventListener("click", syncDenoiseAdv);  // sau onclick của SRV_SW (đã toggle .on)
+async function putDenoise(body){
+  try {
+    const r = await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(r.statusText);
+  } catch (e) { console.warn("Chưa sync cấu hình khử ồn:", e.message); }
+}
+// Slider: cập nhật nhãn % liên tục (input), chỉ PUT khi thả (change).
+$("dnStrength").addEventListener("input", () => { $("dnStrengthVal").textContent = $("dnStrength").value + "%"; });
+$("dnStrength").addEventListener("change", () => putDenoise({ denoise_strength: parseInt($("dnStrength").value, 10) }));
+$("dnMode").addEventListener("change", () => putDenoise({ denoise_mode: $("dnMode").value }));
+$("dnHum").addEventListener("change", () => putDenoise({ denoise_hum: $("dnHum").value }));
+$("swDnRumble").onclick = () => { const on = $("swDnRumble").classList.toggle("on"); putDenoise({ denoise_highpass: on ? 80 : 0 }); };
+$("swDnUpload").onclick = () => { const on = $("swDnUpload").classList.toggle("on"); putDenoise({ denoise_upload_enabled: on }); };
 $("saveAudioDir").onclick = async () => {
   const msg = $("audioDirMsg");
   try {
@@ -142,7 +172,7 @@ function showScreen(name){
   $("tabbar").classList.toggle("hidden", !tabbed);
   // Đồng bộ trạng thái active cho cả tab bar (mobile) lẫn sidebar (laptop).
   document.querySelectorAll("[data-tab]").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-  if (name === "settings"){ loadServerSettings(); loadSpeakerList(); }
+  if (name === "settings"){ loadServerSettings(); loadSpeakerList(); refreshOpfsExport(); }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("[data-tab]").forEach(t => t.onclick = () => {
@@ -306,6 +336,135 @@ function startOpfsWriter(){
     },
   };
 }
+
+// ── Xuất bản ghi OPFS về máy (PC/điện thoại) ───────────────────────────────
+// Gom mọi file PCM trong trình duyệt thành 1 file .zip chứa WAV — tải 1 lần
+// duy nhất nên không bị iOS/Android chặn multi-download. ZIP dùng method
+// "store" (WAV vốn không nén được thêm); phần data trỏ thẳng vào File của
+// OPFS nên không phải giữ toàn bộ audio trong RAM.
+const CRC_TABLE = new Uint32Array(256).map((_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  return c >>> 0;
+});
+function crcUpdate(state, bytes){
+  let c = state;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return c >>> 0;
+}
+async function crcOfWav(headerBuf, file){
+  let state = crcUpdate(0xFFFFFFFF, new Uint8Array(headerBuf));
+  const CHUNK = 4 * 1024 * 1024;
+  for (let off = 0; off < file.size; off += CHUNK)
+    state = crcUpdate(state, new Uint8Array(await file.slice(off, off + CHUNK).arrayBuffer()));
+  return (~state) >>> 0;
+}
+function dosDateTime(d){
+  return {
+    time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
+    date: ((Math.max(0, d.getFullYear() - 1980) & 0x7f) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(),
+  };
+}
+function zipStore(entries){ // entries: {name, crc, size, mtime, parts:[...]}
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const e of entries){
+    const nameB = enc.encode(e.name);
+    const { time, date } = dosDateTime(e.mtime);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); // UTF-8 name
+    lh.setUint16(10, time, true); lh.setUint16(12, date, true);
+    lh.setUint32(14, e.crc, true);
+    lh.setUint32(18, e.size, true); lh.setUint32(22, e.size, true);
+    lh.setUint16(26, nameB.length, true);
+    parts.push(lh.buffer, nameB, ...e.parts);
+    central.push({ nameB, time, date, crc: e.crc, size: e.size, offset });
+    offset += 30 + nameB.length + e.size;
+  }
+  const cdStart = offset;
+  for (const c of central){
+    const h = new DataView(new ArrayBuffer(46));
+    h.setUint32(0, 0x02014b50, true);
+    h.setUint16(4, 20, true); h.setUint16(6, 20, true); h.setUint16(8, 0x0800, true);
+    h.setUint16(12, c.time, true); h.setUint16(14, c.date, true);
+    h.setUint32(16, c.crc, true);
+    h.setUint32(20, c.size, true); h.setUint32(24, c.size, true);
+    h.setUint16(28, c.nameB.length, true);
+    h.setUint32(42, c.offset, true);
+    parts.push(h.buffer, c.nameB);
+    offset += 46 + c.nameB.length;
+  }
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, central.length, true); eocd.setUint16(10, central.length, true);
+  eocd.setUint32(12, offset - cdStart, true); eocd.setUint32(16, cdStart, true);
+  parts.push(eocd.buffer);
+  return new Blob(parts, { type: "application/zip" });
+}
+async function listOpfsRecordings(){
+  const out = [];
+  if (!HAS_OPFS) return out;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("recordings");
+    for await (const [name, handle] of dir.entries()){
+      if (handle.kind === "file") out.push({ name, file: await handle.getFile() });
+    }
+  } catch {} // chưa có thư mục recordings → coi như rỗng
+  return out;
+}
+function opfsWavName(name, used){ // tên đẹp trong zip: ngày + title bản ghi
+  const map = opfsMap();
+  const id = Object.keys(map).find(k => map[k] === name);
+  const m = id ? ALL.find(x => x.id === id) : null;
+  const ms = Number((name.match(/^live-(\d+)/) || [])[1]);
+  const d = m && m.created_at ? new Date(m.created_at) : (ms ? new Date(ms) : new Date());
+  const day = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  const title = ((m && m.title) || name.replace(/\.pcm$/, "")).replace(/[/\\:*?"<>|]/g, "-").slice(0, 80);
+  let base = day + " " + title, out = base + ".wav", n = 2;
+  while (used.has(out)) out = base + " (" + (n++) + ").wav";
+  used.add(out);
+  return { zipName: out, mtime: d };
+}
+const fmtBytes = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+async function refreshOpfsExport(){
+  if (!HAS_OPFS){ $("rowOpfsExport").classList.add("hidden"); return; }
+  const files = await listOpfsRecordings();
+  const total = files.reduce((s, f) => s + f.file.size + 44, 0);
+  $("opfsExport").disabled = !files.length;
+  $("opfsExportHint").textContent = files.length
+    ? files.length + " bản ghi · ~" + fmtBytes(total) + " — gom thành 1 file .zip tải về Downloads/Files"
+    : "Chưa có bản ghi âm nào trong trình duyệt này.";
+}
+$("opfsExport").onclick = async () => {
+  const btn = $("opfsExport"), hint = $("opfsExportHint");
+  btn.disabled = true;
+  try {
+    const files = await listOpfsRecordings();
+    if (!files.length){ hint.textContent = "Chưa có bản ghi âm nào trong trình duyệt này."; return; }
+    const used = new Set(), entries = [];
+    for (let i = 0; i < files.length; i++){
+      hint.textContent = "Đang đóng gói " + (i + 1) + "/" + files.length + "…";
+      const { name, file } = files[i];
+      const header = wavHeader(file.size, 16000);
+      const { zipName, mtime } = opfsWavName(name, used);
+      entries.push({ name: zipName, crc: await crcOfWav(header, file),
+                     size: 44 + file.size, mtime, parts: [header, file] });
+    }
+    const d = new Date();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(zipStore(entries));
+    a.download = "manju-ghi-am-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + ".zip";
+    a.click();
+    // Không revoke URL: zip lớn có thể tải lâu, revoke sớm sẽ hủy download.
+    // Blob trỏ vào File trên đĩa (OPFS) nên giữ URL không tốn RAM đáng kể.
+    hint.textContent = "Đã xuất " + entries.length + " bản ghi. File vẫn còn trong trình duyệt — bật lại Settings để xuất tiếp sau.";
+  } catch (e) {
+    hint.textContent = "Xuất thất bại: " + (e && e.message || e);
+  } finally { btn.disabled = false; }
+};
 
 // ── Detail / result ────────────────────────────────────────────────────────
 let fixedText = "", rawText = null, editedText = null, downloadName = "transcript.txt";

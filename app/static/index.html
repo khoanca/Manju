@@ -599,6 +599,40 @@
         <div class="set-main"><b>Khử ồn micro</b><small>Thử nghiệm</small></div>
         <div class="sw" id="swDenoise"></div>
       </div>
+      <div id="denoiseAdv" class="hidden">
+        <div class="set-row">
+          <div class="set-ico">🔊</div>
+          <div class="set-main"><b>Cường độ khử</b><small>Càng cao càng mạnh tay</small></div>
+          <div class="set-val"><input type="range" id="dnStrength" min="0" max="100" style="width:104px" /><span id="dnStrengthVal">100%</span></div>
+        </div>
+        <div class="set-row">
+          <div class="set-ico">🌫️</div>
+          <div class="set-main"><b>Chế độ nền</b><small>Nền tiếng ồn ổn định hay thay đổi</small></div>
+          <select id="dnMode">
+            <option value="stationary">Nền ổn định</option>
+            <option value="nonstationary">Nền thay đổi</option>
+          </select>
+        </div>
+        <div class="set-row">
+          <div class="set-ico">〰️</div>
+          <div class="set-main"><b>Lọc tiếng ù trầm</b><small>Bỏ rumble tần thấp dưới 80Hz</small></div>
+          <div class="sw" id="swDnRumble"></div>
+        </div>
+        <div class="set-row">
+          <div class="set-ico">💡</div>
+          <div class="set-main"><b>Khử ù điện lưới</b><small>Tiếng ù đều từ nguồn điện</small></div>
+          <select id="dnHum">
+            <option value="off">Tắt</option>
+            <option value="50">50Hz</option>
+            <option value="60">60Hz</option>
+          </select>
+        </div>
+        <div class="set-row">
+          <div class="set-ico">📂</div>
+          <div class="set-main"><b>Khử ồn cho file tải lên</b><small>Áp dụng cả khi transcribe file</small></div>
+          <div class="sw" id="swDnUpload"></div>
+        </div>
+      </div>
     </div>
 
     <div class="sec-label">Thuật ngữ / ngữ cảnh</div>
@@ -617,6 +651,11 @@
         <div class="set-ico">📲</div>
         <div class="set-main"><b>Lưu audio trên thiết bị này</b><small id="localAudioHint">Bản ghi âm nằm trong bộ nhớ trình duyệt, không gửi lên server — nhớ tải về nếu cần giữ lâu (iOS có thể tự dọn sau ~7 ngày không dùng)</small></div>
         <div class="sw" id="swLocalAudio"></div>
+      </div>
+      <div class="set-row" id="rowOpfsExport">
+        <div class="set-ico">💾</div>
+        <div class="set-main"><b>Tải bản ghi trong trình duyệt về máy</b><small id="opfsExportHint">Đang kiểm tra…</small></div>
+        <button class="mini pri" id="opfsExport" disabled>Tải .zip</button>
       </div>
       <div class="set-row" style="display:block">
         <div class="set-main" style="margin-bottom:8px"><b>Thư mục lưu audio</b><small>Trên máy chạy app · <span id="audioDirMsg"></span></small></div>
