@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
   audio_dir  TEXT,
   speaker_map TEXT,  -- JSON {"<local_cluster_idx>": speaker_id | null} (lớp speaker)
   edited_text TEXT,  -- bản user sửa tay (US-801); NULL = chưa sửa, dùng text
-  golden INTEGER DEFAULT 0  -- US-819: edited_text đủ đúng để làm chuẩn đo WER
+  golden INTEGER DEFAULT 0,  -- US-819: edited_text đủ đúng để làm chuẩn đo WER
+  domain TEXT  -- Lớp B: ngành nghề dự đoán (devops|finance|...); NULL = chưa/không rõ
 );
 CREATE INDEX IF NOT EXISTS idx_t_created ON transcripts(created_at DESC);
 
@@ -124,6 +125,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE transcripts ADD COLUMN edited_text TEXT")
     if "golden" not in cols:
         conn.execute("ALTER TABLE transcripts ADD COLUMN golden INTEGER DEFAULT 0")
+    if "domain" not in cols:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN domain TEXT")
     spk_cols = {r["name"] for r in conn.execute("PRAGMA table_info(speakers)")}
     if "region" not in spk_cols:
         conn.execute("ALTER TABLE speakers ADD COLUMN region TEXT")
@@ -147,6 +150,7 @@ class TranscriptRecord:
     audio_file: str | None
     audio_dir: str | None
     speaker_map: dict | None = None  # {local_cluster_idx: speaker_id | null} (lớp speaker)
+    domain: str | None = None  # Lớp B: ngành nghề dự đoán từ nội dung
 
 
 def insert_transcript(rec: TranscriptRecord) -> None:
@@ -155,8 +159,8 @@ def insert_transcript(rec: TranscriptRecord) -> None:
             """INSERT OR REPLACE INTO transcripts
                (id, title, language, model, duration, created_at, text, raw_text,
                 segments, chars, words, corrected, llm_model, audio_file, audio_dir,
-                speaker_map)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                speaker_map, domain)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 rec.transcript_id, rec.title, rec.language, rec.model,
                 round(rec.duration, 1), rec.created_at, rec.text, rec.raw_text,
@@ -164,6 +168,7 @@ def insert_transcript(rec: TranscriptRecord) -> None:
                 len(rec.text), len(rec.text.split()), int(rec.raw_text is not None),
                 rec.llm_model, rec.audio_file, rec.audio_dir,
                 json.dumps(rec.speaker_map, ensure_ascii=False) if rec.speaker_map else None,
+                rec.domain,
             ),
         )
 
@@ -184,6 +189,7 @@ def _meta(row: sqlite3.Row) -> dict:
         "has_segments": row["segments"] is not None,
         "audio": row["audio_file"],
         "golden": bool(row["golden"]),
+        "domain": row["domain"],
     }
 
 
@@ -192,7 +198,7 @@ def list_transcripts() -> list[dict]:
         rows = conn.execute(
             """SELECT t.id, t.title, t.language, t.model, t.duration, t.created_at,
                       t.chars, t.words, t.corrected, t.llm_model, t.segments,
-                      t.audio_file, t.golden, s.status AS sync_status
+                      t.audio_file, t.golden, t.domain, s.status AS sync_status
                FROM transcripts t
                LEFT JOIN sync_state s ON s.transcript_id = t.id
                ORDER BY t.created_at DESC"""
