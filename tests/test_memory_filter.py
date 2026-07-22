@@ -61,5 +61,9 @@ def test_from_library_only_approved(tmp_path, monkeypatch):
 
 
 def test_from_library_never_fails_on_db_error(monkeypatch):
+    # Lỗi DB không raise; base lexicon (luôn bật, không đọc DB) vẫn dùng được.
     monkeypatch.setattr(db, "list_corrections", lambda **_: (_ for _ in ()).throw(RuntimeError()))
-    assert memory_filter.from_library() == []
+    mem = memory_filter.from_library()
+    assert mem  # không rỗng — còn base
+    fixed, hits = memory_filter.apply_memory("cái mô độ", mem)
+    assert fixed == "cái model" and hits == 1

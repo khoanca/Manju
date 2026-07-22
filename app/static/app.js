@@ -260,6 +260,58 @@ function filterSortHistory(){
   return out.sort(SORTERS[$("sortBy").value] || SORTERS["date-desc"]);
 }
 
+// Nhãn ngày cho tiêu đề nhóm: hôm nay / hôm qua / thứ + ngày đầy đủ.
+function dayLabel(iso){
+  const d = new Date(iso);
+  if (isNaN(d)) return "Không rõ ngày";
+  const ymd = localYMD(d);
+  const now = new Date();
+  const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+  if (ymd === localYMD(now))  return "Hôm nay";
+  if (ymd === localYMD(yest)) return "Hôm qua";
+  try{ return d.toLocaleDateString("vi-VN", {weekday:"long", day:"numeric", month:"long", year:"numeric"}); }
+  catch{ return fmtDate(iso); }
+}
+// Giờ trong ngày (HH:MM) — hiển thị trên thẻ vì ngày đã nằm ở tiêu đề nhóm.
+function fmtHM(iso){ const d = new Date(iso); return isNaN(d) ? "" : localHM(d); }
+
+function recCard(m, opfs){
+  const li = document.createElement("li");
+  li.className = "rec-card";
+  const words = m.words != null ? m.words : Math.round((m.chars||0)/5);
+  const chips = (m.audio ? `<span class="chip audio">🔊 Audio</span>` : (opfs[m.id] ? `<span class="chip audio">📱 Audio</span>` : ""))
+              + (m.corrected ? `<span class="chip ai">✦ AI</span>` : "");
+  li.innerHTML = `
+    <div class="rec-top">
+      <div class="avatar"><i style="height:9px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:14px"></i><i style="height:8px"></i></div>
+      <div class="rec-main">
+        <b></b>
+        <div class="rec-sub">
+          <span>${ICN.clk} ${fmtHM(m.created_at)}</span>
+          <span>${ICN.doc} ${nfmt(words)} words</span>
+        </div>
+      </div>
+    </div>
+    <div class="rec-div"></div>
+    <div class="rec-foot">
+      <span class="dur">${ICN.clk} ${fmtDur(m.duration)}</span>
+      <div class="chips">${chips}</div>
+    </div>`;
+  li.querySelector("b").textContent = m.title;
+  li.onclick = () => openDetail(m);
+  return li;
+}
+
+// Tiêu đề nhóm ngày: nhãn ngày + tóm tắt (số bản ghi · tổng thời lượng).
+function dayHeader(label, group){
+  const li = document.createElement("li");
+  li.className = "day-head";
+  const total = group.reduce((s, m) => s + (m.duration || 0), 0);
+  li.innerHTML = `<span class="day-name">${label}</span>`
+    + `<span class="day-meta">${group.length} bản ghi · ${fmtDur(total)}</span>`;
+  return li;
+}
+
 function renderHistory(){
   const box = $("history");
   const items = filterSortHistory();
@@ -271,31 +323,25 @@ function renderHistory(){
     return;
   }
   const opfs = opfsMap();
+  // Gom theo ngày chỉ khi đang sắp theo ngày; sắp theo tên/thời lượng thì để phẳng.
+  const grouped = $("sortBy").value.startsWith("date-");
+  if (!grouped){
+    for (const m of items) box.appendChild(recCard(m, opfs));
+    return;
+  }
+  let curDay = null, curGroup = null, curHead = null;
   for (const m of items){
-    const li = document.createElement("li");
-    li.className = "rec-card";
-    const words = m.words != null ? m.words : Math.round((m.chars||0)/5);
-    const chips = (m.audio ? `<span class="chip audio">🔊 Audio</span>` : (opfs[m.id] ? `<span class="chip audio">📱 Audio</span>` : ""))
-                + (m.corrected ? `<span class="chip ai">✦ AI</span>` : "");
-    li.innerHTML = `
-      <div class="rec-top">
-        <div class="avatar"><i style="height:9px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:14px"></i><i style="height:8px"></i></div>
-        <div class="rec-main">
-          <b></b>
-          <div class="rec-sub">
-            <span>${ICN.cal} ${fmtDate(m.created_at)}</span>
-            <span>${ICN.doc} ${nfmt(words)} words</span>
-          </div>
-        </div>
-      </div>
-      <div class="rec-div"></div>
-      <div class="rec-foot">
-        <span class="dur">${ICN.clk} ${fmtDur(m.duration)}</span>
-        <div class="chips">${chips}</div>
-      </div>`;
-    li.querySelector("b").textContent = m.title;
-    li.onclick = () => openDetail(m);
-    box.appendChild(li);
+    const day = (() => { const d = new Date(m.created_at); return isNaN(d) ? "?" : localYMD(d); })();
+    if (day !== curDay){
+      curDay = day; curGroup = [];
+      curHead = dayHeader(dayLabel(m.created_at), curGroup);
+      box.appendChild(curHead);
+    }
+    curGroup.push(m);
+    // Cập nhật tóm tắt (số bản ghi · tổng thời lượng) khi thêm bản ghi vào nhóm.
+    const total = curGroup.reduce((s, x) => s + (x.duration || 0), 0);
+    curHead.querySelector(".day-meta").textContent = `${curGroup.length} bản ghi · ${fmtDur(total)}`;
+    box.appendChild(recCard(m, opfs));
   }
 }
 
@@ -519,6 +565,7 @@ function setResult(text, raw, segments, id, hasServerAudio, speakerMap, edited){
   baseTextAtOpen = editedText != null ? editedText : text;
   curSegments = segments; curSpeakerMap = speakerMap || {}; curDetailId = id;
   curHasServerAudio = !!(hasServerAudio && id);
+  resetVarResult();   // đổi bản ghi → xoá kết quả chạy lại của bản trước
   applyView();
   renderSegments(segments);
   showAudio(id, hasServerAudio);
@@ -563,6 +610,9 @@ function applyView(){
   $("editHint").style.display = curView === "raw" ? "none" : "";
   // Rà lặp/nhiễu chỉ áp cho bản sửa được (pass 2 / sửa tay), không cho bản máy thô.
   $("reviewFix").style.display = curView === "raw" ? "none" : "";
+  // Chạy lại biến thể cần giải mã lại file ghi âm gốc → chỉ hiện khi có audio server.
+  $("varPanel").style.display = curHasServerAudio ? "" : "none";
+  if (curHasServerAudio) loadVarOptions();
   updateSaveBtn();
 }
 $("toggleRaw").onclick = () => {
@@ -655,6 +705,75 @@ $("reviewFix").onclick = async () => {
       + (j.dropped.length ? ", bỏ " + j.dropped.length + " cụm nhiễu" : "")
       + ".\nSoát lại rồi bấm Lưu bản sửa để áp.");
   } catch (e) { alert("Lỗi rà sửa: " + e.message); }
+  finally { b.disabled = false; }
+};
+
+// ── Chạy lại biến thể: phiên bản pipeline × model sửa ──────────────────────
+// Giải mã lại file ghi âm gốc trên server (cache theo bản ghi), áp phiên bản
+// ASR-cleanup + model LLM chọn được. Vừa test (đổi dropdown so kết quả) vừa cho
+// user "Dùng bản này" để lưu thành bản sửa tay.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let varText = "", varOptsLoaded = false;
+async function loadVarOptions(){
+  if (varOptsLoaded) return;
+  try {
+    const o = await (await fetch("/api/reanalyze-options")).json();
+    $("varVersion").innerHTML = o.versions
+      .map(v => `<option value="${v.key}">${v.label}</option>`).join("");
+    $("varModel").innerHTML = o.models
+      .map(m => `<option value="${m.key}"${m.available ? "" : " disabled"}>`
+        + `${m.label}${m.available ? "" : " — chưa có key"}</option>`).join("");
+    varOptsLoaded = true;
+  } catch { /* để trống → dropdown rỗng, người dùng thấy panel không chạy */ }
+}
+function resetVarResult(){
+  varText = "";
+  $("varText").style.display = "none";
+  $("varActions").style.display = "none";
+  $("varNote").textContent = "Chọn phiên bản xử lý + model sửa rồi “Chạy lại” để "
+    + "xem kết quả trên chính bản ghi này.";
+}
+$("varRun").onclick = async () => {
+  if (!curDetailId) return;
+  const b = $("varRun"); b.disabled = true; const label = b.textContent;
+  b.textContent = "Đang chạy…";
+  $("varNote").textContent = "Đang giải mã lại + xử lý… (lần đầu lâu hơn vì phải giải mã audio)";
+  try {
+    const r = await fetch(`/api/transcripts/${curDetailId}/reanalyze`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: $("varVersion").value, model: $("varModel").value }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    let job;
+    for (;;) {
+      await sleep(1000);
+      job = await (await fetch(`/api/reanalyze/${j.job_id}`)).json();
+      if (job.status === "done" || job.status === "error") break;
+    }
+    if (job.status === "error") throw new Error(job.error || "chạy lại thất bại");
+    varText = job.text || "";
+    $("varText").textContent = varText || "(rỗng)";
+    $("varText").style.display = "";
+    $("varActions").style.display = "";
+    const vLabel = $("varVersion").selectedOptions[0].textContent;
+    const mLabel = $("varModel").selectedOptions[0].textContent;
+    const src = job.from_live
+      ? "từ segment live gốc (đúng cái live nghe)"
+      : "giải mã lại dạng batch — KHÁC luồng live, phiên bản cleanup chỉ tham khảo";
+    $("varNote").textContent = `${vLabel} · ${mLabel} — ${job.segments} segment, `
+      + `${varText.length} ký tự · ${src}.`;
+  } catch (e) { $("varNote").textContent = "Lỗi: " + e.message; }
+  finally { b.disabled = false; b.textContent = label; }
+};
+$("varCopy").onclick = () => navigator.clipboard?.writeText(varText);
+$("varApply").onclick = async () => {
+  if (!varText || !curDetailId) return;
+  if (!confirm("Lưu bản này thành bản sửa tay của bản ghi?")) return;
+  const b = $("varApply"); b.disabled = true;
+  try {
+    if (await patchText(varText)){ await reloadDetail(); }
+  } catch (e) { alert("Lỗi lưu: " + e.message); }
   finally { b.disabled = false; }
 };
 

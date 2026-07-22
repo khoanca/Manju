@@ -270,6 +270,7 @@ class LiveSession:
         self.utt_seq = 0
         self.sentences: dict[int, str] = {}  # bản chính (corrected ghi đè final)
         self.raw_sentences: dict[int, str] = {}
+        self.raw_scores: dict[int, float] = {}  # min_logprob mỗi utt (cho reanalyze)
         self.utt_start: dict[int, float] = {}  # mốc bắt đầu mỗi câu (giây, tính từ đầu phiên)
         # US-813: denoise opt-in — chỉ thread decode đụng _clean (không cần lock);
         # bản WAV lưu vẫn là raw (feed ghi thẳng), artifact không dính vào file.
@@ -520,6 +521,7 @@ class LiveSession:
         if text:
             self.sentences[utt] = text
             self.raw_sentences[utt] = text
+            self.raw_scores[utt] = res.min_logprob
             if self.correct_enabled:
                 # Mọi câu final (kể cả câu ngắn bỏ qua pass 2) đều nuôi tracker
                 # để topic bám sát mạch cuộc họp.
@@ -678,6 +680,17 @@ class LiveSession:
             {"start": round(self.utt_start.get(k, 0.0), 2), "text": self.sentences[k]}
             for k in order
         ]
+        # ASR thô mỗi utterance (text như live nghe, trước pass 2) — reanalyze dùng
+        # THAY vì batch-decode lại (khác live). no_speech_prob không có ở live → 0.0.
+        raw_segments = [
+            {
+                "text": self.raw_sentences[k],
+                "no_speech_prob": 0.0,
+                "avg_logprob": round(self.raw_scores.get(k, 0.0), 4),
+            }
+            for k in order
+            if k in self.raw_sentences
+        ]
         # Đóng gói bản ghi mic thành WAV để lưu kèm (nghe/tải lại từ lịch sử).
         wav_path: Path | None = None
         if pcm:
@@ -695,6 +708,7 @@ class LiveSession:
             raw_text=raw if raw != text else None,
             segments=segments,
             audio_path=wav_path,
+            raw_segments=raw_segments,
         ))
 
 

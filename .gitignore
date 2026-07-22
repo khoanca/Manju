@@ -10,3 +10,6 @@ data/manju.db*
 .env
 # Model diarization/embedding ONNX — tải qua scripts/fetch_diarize_models.py
 models/
+# Supabase CLI local state (không commit)
+supabase/.branches/
+supabase/.temp/

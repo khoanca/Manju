@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import corrections, db, transcribe
+from app import corrections, db, memory_filter, transcribe
 from app.corrections import (
     BIAS_CAP_CHARS,
     LEXICON_DIR,
@@ -550,6 +550,52 @@ def test_live_session_snapshots_bias_at_start(tmp_db, monkeypatch):
 # ── Seed lexicon vùng miền (T-012, US-804) ─────────────────────────────────
 def _lexicon_entries(region: str) -> list[dict]:
     return json.loads((LEXICON_DIR / f"{region}.json").read_text(encoding="utf-8"))
+
+
+def _base_entries() -> list[dict]:
+    return json.loads((LEXICON_DIR / "base.json").read_text(encoding="utf-8"))
+
+
+def test_base_lexicon_schema_and_distinct():
+    """base.json: schema hợp lệ, không cặp trùng — vì memory_filter thay xác định
+    lên MỌI transcript, trùng/rác sẽ hại rộng."""
+    entries = _base_entries()
+    assert isinstance(entries, list) and entries
+    seen: set[tuple[str, str]] = set()
+    for e in entries:
+        assert set(e) == {"wrong", "right"}, e
+        assert e["wrong"].strip() and e["right"].strip(), e
+        pair = (e["wrong"], e["right"])
+        assert pair not in seen, f"cặp trùng: {pair}"
+        seen.add(pair)
+
+
+def test_base_pairs_loaded_from_json():
+    pairs = corrections.base_pairs()
+    assert ("mô độ", "model") in pairs
+    assert len(pairs) == len(_base_entries())
+
+
+def test_base_lexicon_fixes_model_via_memory(tmp_db):
+    """"mô độ"→model, "con claw"→Claude được memory_filter thay xác định — KHÔNG
+    cần seed DB (base nạp tại chỗ đọc). Đúng ca live-1738 pass 2 bỏ sót."""
+    fixed, hits = memory_filter.correct_from_memory("cái mô độ của con claw nó mạnh hơn")
+    assert "model" in fixed and "Claude" in fixed
+    assert hits >= 2
+
+
+def test_base_lexicon_not_in_corrections_table(tmp_db):
+    """Base KHÔNG nhồi vào bảng corrections → thư viện user sạch, đếm không lệch."""
+    assert db.list_corrections() == []
+    memory_filter.correct_from_memory("cái mô độ")  # dùng base nhưng không ghi DB
+    assert db.list_corrections() == []
+
+
+def test_library_pair_overrides_base_on_conflict(tmp_db):
+    """Cặp thư viện approved trùng `wrong` với base thì thắng (đặt sau, đã duyệt)."""
+    db.add_corrections_ignore([("mô độ", "mô-đen", "user")], source="user")
+    fixed, _ = memory_filter.correct_from_memory("cái mô độ")
+    assert "mô-đen" in fixed
 
 
 def test_lexicon_files_parse_and_schema():

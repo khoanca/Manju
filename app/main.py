@@ -21,6 +21,7 @@ from app import (
     engines,
     live,
     org,
+    reanalyze,
     slang_trend,
     subtitle,
     transcribe,
@@ -330,6 +331,39 @@ def api_review_fix(transcript_id: str) -> dict:
         "dropped": result.dropped,
         "changed": result.cleaned != current,
     }
+
+
+class ReanalyzeIn(BaseModel):
+    version: str = "new"   # new | old | raw (reanalyze.PIPELINE_VERSIONS)
+    model: str = "none"    # none | haiku | gemma (reanalyze.CORRECTION_MODELS)
+
+
+@app.get("/api/reanalyze-options")
+def api_reanalyze_options() -> dict:
+    """Danh sách phiên bản pipeline + model sửa cho 2 dropdown trên UI (model
+    cloud chỉ available khi có key OpenRouter)."""
+    return reanalyze.options()
+
+
+@app.post("/api/transcripts/{transcript_id}/reanalyze")
+def api_reanalyze(transcript_id: str, body: ReanalyzeIn) -> dict:
+    """Chạy lại bản ghi theo biến thể chọn (phiên bản pipeline × model sửa) trên
+    CÙNG một lần giải mã file ghi âm gốc (cache theo bản ghi). Chạy nền → trả
+    job_id; UI hỏi GET /api/reanalyze/{job_id}. Cần transcript có file ghi âm."""
+    if transcribe.read_transcript(transcript_id) is None:
+        raise HTTPException(404, "Không tìm thấy bản ghi")
+    try:
+        return {"job_id": reanalyze.start(transcript_id, body.version, body.model)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/reanalyze/{job_id}")
+def api_reanalyze_job(job_id: str) -> dict:
+    job = reanalyze.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Không tìm thấy job")
+    return job
 
 
 def _speaker_labels(speaker_map: dict | None) -> dict[int, str]:

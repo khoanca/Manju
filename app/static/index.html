@@ -81,6 +81,12 @@
 
   /* recording list */
   .list{ display:flex; flex-direction:column; gap:14px; }
+  .day-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+             padding:4px 4px 2px; margin-top:6px; }
+  .day-head:first-child{ margin-top:0; }
+  .day-name{ font-size:14px; font-weight:750; letter-spacing:-.1px; color:var(--fg);
+             text-transform:capitalize; }
+  .day-meta{ font-size:12px; font-weight:600; color:var(--faint); white-space:nowrap; }
   .rec-card{ background:var(--card); border-radius:22px; padding:18px; box-shadow:var(--sh); }
   .rec-card:active{ transform:scale(.992); }
   .rec-top{ display:flex; align-items:center; gap:14px; }
@@ -248,6 +254,18 @@
   #result:focus{ border-color:var(--accent); }
   #result[readonly]{ border-color:transparent; background:var(--card-2); }
   .edit-hint{ margin:0 0 8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  .var-panel{ margin-top:14px; border-top:1px solid var(--line); padding-top:14px; }
+  .var-controls{ display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+  .var-controls label{ display:flex; flex-direction:column; gap:4px; flex:1 1 150px; min-width:0;
+    font-size:11px; color:var(--faint); font-weight:600; }
+  .var-controls select{ border:1px solid var(--line); border-radius:11px; padding:9px 11px;
+    font-size:14px; font-weight:600; background:var(--card-2); outline:none; width:100%; min-width:0; }
+  .var-controls select:focus{ border-color:var(--accent); }
+  .var-controls .mini{ flex:0 0 auto; }
+  .var-note{ font-size:12.5px; color:var(--muted,#888); margin:10px 0 0; }
+  .var-text{ white-space:pre-wrap; word-break:break-word; font-size:13.5px; line-height:1.5;
+    background:var(--card-2); border-radius:12px; padding:12px; max-height:340px; overflow-y:auto; margin:10px 0 0; }
+  .var-actions{ display:flex; gap:8px; margin-top:10px; }
   .segs{ margin-top:14px; border-top:1px solid var(--line); padding-top:14px; max-height:320px; overflow-y:auto; }
   .segs .seg{ display:flex; gap:12px; margin:0 0 8px; font-size:14px; align-items:baseline; }
   .segs .seg time{ color:var(--accent); font-variant-numeric:tabular-nums; flex:0 0 auto; font-weight:700; }
@@ -338,7 +356,7 @@
     .app{ max-width:none; }
     .screen{ padding-left:36px; padding-right:36px; }
     .list{ display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:16px; }
-    .list .empty{ grid-column:1 / -1; }
+    .list .empty, .list .day-head{ grid-column:1 / -1; }
     #screen-record, #screen-settings, #screen-upload, #screen-detail{
       max-width:680px; margin:0 auto; width:100%; }
   }
@@ -389,7 +407,7 @@
     .top{ margin-bottom:26px; }
     .round-btn{ width:46px; height:46px; }
     .list{ display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:16px; }
-    .list .empty{ grid-column:1 / -1; }
+    .list .empty, .list .day-head{ grid-column:1 / -1; }
     .rec-card{ transition:transform .12s, box-shadow .12s; cursor:pointer; }
     .rec-card:hover{ transform:translateY(-2px); box-shadow:0 16px 40px rgba(20,24,33,.1); }
 
@@ -780,6 +798,23 @@
       <p class="edit-hint" id="editHint">✎ Sửa trực tiếp trong ô dưới. Bản sửa nuôi thư viện tự học (lần sau máy nhận đúng hơn) và dùng làm chuẩn đo độ chính xác.</p>
       <textarea id="result" placeholder="Text…"></textarea>
       <div id="segList" class="segs" style="display:none"></div>
+      <div id="varPanel" class="var-panel" style="display:none">
+        <div class="var-controls">
+          <label>Phiên bản
+            <select id="varVersion"></select>
+          </label>
+          <label>Model sửa
+            <select id="varModel"></select>
+          </label>
+          <button class="mini pri" id="varRun">Chạy lại</button>
+        </div>
+        <p class="var-note" id="varNote">Chọn phiên bản xử lý + model sửa rồi “Chạy lại” để xem kết quả trên chính bản ghi này.</p>
+        <pre class="var-text" id="varText" style="display:none"></pre>
+        <div class="var-actions" id="varActions" style="display:none">
+          <button class="mini" id="varCopy">Copy</button>
+          <button class="mini pri" id="varApply">Dùng bản này</button>
+        </div>
+      </div>
     </div>
   </section>
 

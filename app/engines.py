@@ -70,6 +70,15 @@ _HALLUCINATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bản regex hallucination TRƯỚC ffe38d2 — chỉ dùng cho công cụ so sánh A/B
+# (app.reanalyze) để tái dựng đúng hành vi "bản cũ". KHÔNG dùng ở đường ống live.
+_HALLUCINATION_RE_LEGACY = re.compile(
+    r"ghiền mì gõ|subscribe|đăng ký kênh|like và chia sẻ"
+    r"|cảm ơn các bạn đã (xem|theo dõi|lắng nghe)|hẹn gặp lại các bạn"
+    r"|thanks for watching|please like and",
+    re.IGNORECASE,
+)
+
 
 # Lặp thật trong hội thoại tối đa vài lần ("không không không được đâu"); loop
 # thoái hoá của Whisper lặp hàng chục–hàng trăm lần. Ngưỡng đặt cao để chỉ cắt
@@ -197,6 +206,45 @@ def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
     return not _HALLUCINATION_RE.search(text)
 
 
+# ── Hành vi ASR-cleanup "bản cũ" (trước ffe38d2) — chỉ cho công cụ so sánh A/B ──
+def keep_segment_legacy(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
+    """Như keep_segment nhưng dùng regex hallucination gốc (hẹp hơn). Khác biệt
+    duy nhất so với bản mới nằm ở regex — token/digit-loop không đổi."""
+    if no_speech_prob > 0.6 and avg_logprob < -1.0:
+        return False
+    if _is_token_loop(text) or _is_digit_loop(text):
+        return False
+    return not _HALLUCINATION_RE_LEGACY.search(text)
+
+
+def collapse_loops_legacy(text: str) -> str:
+    """collapse_loops TRƯỚC ffe38d2: chỉ thu run token-đơn ≥_LOOP_RUN_MIN về 1
+    (không bắt chu kỳ ≥2 token, không bắt lặp trong-token). Giữ nguyên để so A/B."""
+    words = text.split()
+    norm = _norm_tokens(text)
+    if len(words) != len(norm):  # token rỗng sau khi strip → giữ nguyên, không đoán
+        return text
+    out: list[str] = []
+    collapsed = False
+    i = 0
+    while i < len(words):
+        j = i + 1
+        while j < len(words) and norm[j] == norm[i]:
+            j += 1
+        run = j - i
+        if run >= _LOOP_RUN_MIN and len(norm[i]) <= _LOOP_TOKEN_MAXLEN:
+            out.append(words[i])
+            collapsed = True
+        else:
+            out.extend(words[i:j])
+        i = j
+    if not collapsed:
+        return text
+    lead = text[: len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()) :]
+    return f"{lead}{' '.join(out)}{trail}"
+
+
 class Engine(ABC):
     info: EngineInfo
     # True khi revise() thật sự decode được bản tốt hơn. Live CHỈ reroute câu
@@ -234,6 +282,13 @@ class Engine(ABC):
         spec: DecodeSpec,
         on_progress: Callable[[str, float], None],
     ) -> FileResult: ...
+
+    @abstractmethod
+    def raw_file_segments(self, path: Path, spec: DecodeSpec) -> list[dict]:
+        """Giải mã file → segment THÔ, CHƯA qua keep_segment/collapse_loops.
+        Mỗi phần tử: {text, no_speech_prob, avg_logprob}. Dùng cho công cụ so
+        sánh A/B (app.reanalyze) để chạy cả hai bộ hậu-xử-lý trên cùng 1 decode."""
+        ...
 
 
 def _mlx_scored(segments: list[dict], *, with_words: bool) -> DecodeResult:
@@ -372,6 +427,18 @@ class MlxEngine(Engine):
         on_progress(text, 1.0)
         return FileResult(text, duration, segs)
 
+    def raw_file_segments(self, path, spec):
+        with _decode_lock:
+            result = self._transcribe(str(path), spec, final=True, word_timestamps=False)
+        return [
+            {
+                "text": str(seg["text"]),
+                "no_speech_prob": float(seg.get("no_speech_prob", 0.0)),
+                "avg_logprob": float(seg.get("avg_logprob", 0.0)),
+            }
+            for seg in result["segments"]
+        ]
+
 
 class FwEngine(Engine):
     """faster-whisper trên CUDA (float16) hoặc CPU (int8)."""
@@ -487,6 +554,27 @@ class FwEngine(Engine):
             progress = min(seg.end / duration, 0.99) if duration else 0.0
             on_progress("".join(parts).strip(), progress)
         return FileResult("".join(parts).strip(), duration, segs)
+
+    def raw_file_segments(self, path, spec):
+        model = self._get_model(spec.model_override or self.upload_model)
+        segments, _info = model.transcribe(
+            str(path),
+            language=spec.language,
+            vad_filter=True,
+            beam_size=5,
+            initial_prompt=spec.glossary or None,
+            hotwords=spec.glossary or None,
+            condition_on_previous_text=False,
+            temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        )
+        return [
+            {
+                "text": str(getattr(seg, "text", "")),
+                "no_speech_prob": float(getattr(seg, "no_speech_prob", 0.0)),
+                "avg_logprob": float(getattr(seg, "avg_logprob", 0.0)),
+            }
+            for seg in segments
+        ]
 
 
 def _ram_gb() -> float:

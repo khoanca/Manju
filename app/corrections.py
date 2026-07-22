@@ -9,6 +9,7 @@ import string
 from collections import Counter
 from collections.abc import Collection, Sequence
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 
 import httpx
@@ -323,6 +324,24 @@ def import_seed(region: str) -> int:
 def remove_seed(region: str) -> int:
     """Gỡ toàn bộ entry seed của 1 vùng — không đụng entry user/remote."""
     return db.delete_corrections(source="seed", tag=region)
+
+
+# ── Base lexicon: thuật ngữ AI/tech phổ biến, LUÔN bật (không opt-in như vùng) ──
+# Whisper hay phiên âm sai từ Anh cực phổ biến ("mô độ"→model, "con claw"→Claude)
+# mà glossary user thường trống → pass 2 (được dặn không đoán ngoài danh sách) bỏ
+# sót. KHÔNG nhồi vào bảng corrections (làm bẩn thư viện user + đếm sai ở test);
+# nạp tại chỗ đọc: memory_filter thay xác định cho MỌI transcript (live+upload).
+# Chỉ chứa mishearing ĐẶC TRƯNG để thay xác định không đụng tiếng Việt thật.
+@lru_cache(maxsize=1)
+def base_pairs() -> tuple[tuple[str, str], ...]:
+    """Cặp (sai → đúng) từ base.json — cache 1 lần (seed tĩnh). File thiếu/hỏng
+    → () (never-fail). Dùng cho memory_filter (thay xác định trước pass 2)."""
+    try:
+        raw = (LEXICON_DIR / "base.json").read_text(encoding="utf-8")
+        entries = _validate_entries(json.loads(raw))
+    except (OSError, ValueError, LexiconError):
+        return ()
+    return tuple((e["wrong"].strip(), e["right"].strip()) for e in entries)
 
 
 def fetch_remote_lexicon(url: str) -> list[dict]:

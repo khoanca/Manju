@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from app import db
+from app import corrections, db
 
 # Cụm `wrong` ngắn hơn ngưỡng dễ trùng âm tiết Việt thường ("re", "đi") → bỏ,
 # nhường pass 2 (có ngữ cảnh) xử. Chỉ thay khi cụm đủ đặc trưng.
@@ -64,12 +64,17 @@ def apply_memory(text: str, memory: Memory) -> tuple[str, int]:
 
 
 def from_library() -> Memory:
-    """Ký ức = mọi cặp approved trong thư viện. Lỗi DB → [] (never-fail)."""
+    """Ký ức = mọi cặp approved trong thư viện + base lexicon AI/tech (luôn bật).
+    Thư viện đặt TRƯỚC base: build_memory giữ thứ tự này ở các cặp cùng độ dài
+    `wrong`, apply_memory thay tuần tự nên cặp thư viện (user/seed đã duyệt) thắng
+    base tĩnh khi trùng `wrong`. Lỗi DB → chỉ base (never-fail)."""
     try:
         rows = db.list_corrections(status="approved")
+        pairs = [(r["wrong"], r["right"]) for r in rows]
     except Exception:  # noqa: BLE001 — ký ức hỏng không được chặn transcribe
-        return []
-    return build_memory((r["wrong"], r["right"]) for r in rows)
+        pairs = []
+    pairs += corrections.base_pairs()
+    return build_memory(pairs)
 
 
 def correct_from_memory(text: str) -> tuple[str, int]:

@@ -53,6 +53,7 @@ class TranscriptDraft:
     audio_path: Path | None = None
     speaker_map: dict | None = None  # pass 3: {cụm local: speaker_id | null}
     domain: str | None = None  # Lớp B: ngành nghề dự đoán
+    raw_segments: list[dict] | None = None  # ASR thô live (reanalyze dùng thay decode lại)
 
 
 # ── Quản lý job (in-memory) ───────────────────────────────────────────────
@@ -258,6 +259,7 @@ def save_transcript(draft: TranscriptDraft) -> str:
         audio_dir=str(audio_dir) if audio_name else None,
         speaker_map=draft.speaker_map,
         domain=draft.domain,
+        raw_segments=draft.raw_segments,
     ))
     return transcript_id
 

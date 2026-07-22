@@ -127,6 +127,10 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE transcripts ADD COLUMN golden INTEGER DEFAULT 0")
     if "domain" not in cols:
         conn.execute("ALTER TABLE transcripts ADD COLUMN domain TEXT")
+    if "raw_segments" not in cols:
+        # Segment ASR thô của phiên live (text + avg_logprob) — để reanalyze chạy
+        # lại đúng cái live đã nghe, không phải batch-decode lại (khác live).
+        conn.execute("ALTER TABLE transcripts ADD COLUMN raw_segments TEXT")
     spk_cols = {r["name"] for r in conn.execute("PRAGMA table_info(speakers)")}
     if "region" not in spk_cols:
         conn.execute("ALTER TABLE speakers ADD COLUMN region TEXT")
@@ -151,6 +155,7 @@ class TranscriptRecord:
     audio_dir: str | None
     speaker_map: dict | None = None  # {local_cluster_idx: speaker_id | null} (lớp speaker)
     domain: str | None = None  # Lớp B: ngành nghề dự đoán từ nội dung
+    raw_segments: list[dict] | None = None  # ASR thô live [{text, no_speech_prob, avg_logprob}]
 
 
 def insert_transcript(rec: TranscriptRecord) -> None:
@@ -159,8 +164,8 @@ def insert_transcript(rec: TranscriptRecord) -> None:
             """INSERT OR REPLACE INTO transcripts
                (id, title, language, model, duration, created_at, text, raw_text,
                 segments, chars, words, corrected, llm_model, audio_file, audio_dir,
-                speaker_map, domain)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                speaker_map, domain, raw_segments)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 rec.transcript_id, rec.title, rec.language, rec.model,
                 round(rec.duration, 1), rec.created_at, rec.text, rec.raw_text,
@@ -169,6 +174,7 @@ def insert_transcript(rec: TranscriptRecord) -> None:
                 rec.llm_model, rec.audio_file, rec.audio_dir,
                 json.dumps(rec.speaker_map, ensure_ascii=False) if rec.speaker_map else None,
                 rec.domain,
+                json.dumps(rec.raw_segments, ensure_ascii=False) if rec.raw_segments else None,
             ),
         )
 
@@ -226,6 +232,11 @@ def read_transcript(transcript_id: str) -> dict | None:
     if row["speaker_map"] is not None:
         try:
             data["speaker_map"] = json.loads(row["speaker_map"])
+        except Exception:  # noqa: BLE001
+            pass
+    if row["raw_segments"] is not None:
+        try:
+            data["raw_segments"] = json.loads(row["raw_segments"])
         except Exception:  # noqa: BLE001
             pass
     return data

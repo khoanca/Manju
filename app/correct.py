@@ -54,6 +54,7 @@ class LlmOpts:
     timeout: float = TIMEOUT_S
     pairs: tuple[tuple[str, str], ...] = ()  # few-shot (sai → đúng) từ thư viện (US-803)
     uncertain: tuple[str, ...] = ()  # cụm word-confidence thấp từ ASR (US-812)
+    model: str = ""  # override tên model (rỗng = mặc định của backend đang dùng)
 
 _SYSTEM_PROMPT = (
     "Bạn là công cụ soát lỗi transcript cuộc họp tiếng Việt có pha thuật ngữ "
@@ -128,7 +129,7 @@ def _chat_ollama(client: httpx.Client, system: str, user: str, opts: LlmOpts) ->
     resp = client.post(
         f"{OLLAMA_URL}/api/chat",
         json={
-            "model": OLLAMA_MODEL,
+            "model": opts.model or OLLAMA_MODEL,
             "stream": False,
             "think": False,
             # num_ctx cố định: không kế thừa OLLAMA_CONTEXT_LENGTH của server
@@ -154,7 +155,7 @@ def _chat_openrouter(client: httpx.Client, system: str, user: str, opts: LlmOpts
         f"{OPENROUTER_URL}/chat/completions",
         headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
         json={
-            "model": OPENROUTER_MODEL,
+            "model": opts.model or OPENROUTER_MODEL,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -315,27 +316,38 @@ def correct_text(
     glossary: str = "",
     on_progress: Callable[[float], None] | None = None,
     pairs: tuple[tuple[str, str], ...] = (),
+    backend: str = "",
+    model: str = "",
 ) -> tuple[str, bool]:
-    """Trả (text đã sửa, True) nếu pass 2 chạy trót lọt, ngược lại (text gốc, False)."""
+    """Trả (text đã sửa, True) nếu pass 2 chạy trót lọt, ngược lại (text gốc, False).
+
+    `backend`: "" = tự chọn (OpenRouter nếu có key, không thì Ollama) + fallback
+    như cũ; "openrouter"/"ollama" = ép đúng backend đó, KHÔNG fallback (lỗi →
+    (text, False)) — dùng cho công cụ so model. `model` override tên model.
+    """
     text = text.strip()
     if not text:
         return text, False
     chunks = _split_chunks(text)
     fixed_parts: list[str] = []
-    opts = LlmOpts(glossary=glossary, pairs=pairs)
+    opts = LlmOpts(glossary=glossary, pairs=pairs, model=model)
+    auto = backend == ""
+    use_openrouter = backend == "openrouter" or (auto and openrouter_enabled())
     try:
         with httpx.Client() as client:
             for i, chunk in enumerate(chunks):
-                if openrouter_enabled():
+                if use_openrouter:
                     try:
                         fixed = _correct_chunk_openrouter(client, chunk, opts)
-                    except Exception:  # noqa: BLE001 — rơi về LLM local
+                    except Exception:  # noqa: BLE001 — auto: rơi về local; ép: raise
+                        if not auto:
+                            raise
                         fixed = _correct_chunk(client, chunk, opts)
                 else:
                     fixed = _correct_chunk(client, chunk, opts)
                 fixed_parts.append(fixed)
                 if on_progress:
                     on_progress((i + 1) / len(chunks))
-    except Exception:  # noqa: BLE001 — Ollama tắt/timeout → dùng bản gốc
+    except Exception:  # noqa: BLE001 — Ollama tắt/timeout / ép backend lỗi → bản gốc
         return text, False
     return " ".join(fixed_parts).strip(), True
