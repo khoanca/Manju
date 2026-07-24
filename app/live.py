@@ -143,13 +143,15 @@ class ContextTracker:
                 parts.append(" ".join(self._recent))
             return "\n".join(parts)
 
-    def close(self) -> None:
-        """Ngừng nhận condense mới, chờ condense đang chạy xong — không rò thread."""
+    def close(self, timeout: float = CONTEXT_TOPIC_TIMEOUT_S + 5) -> None:
+        """Ngừng nhận condense mới. `timeout` nhỏ khi Dừng: kết quả condense chỉ
+        dùng cho bias/pass-2 TRONG phiên, lưu xong là bỏ → không đáng chờ tới 25s.
+        Thread condense là daemon nên bỏ dở không rò khi process thoát."""
         with self._lock:
             self._closed = True
             thread = self._thread
         if thread is not None:
-            thread.join(timeout=CONTEXT_TOPIC_TIMEOUT_S + 5)
+            thread.join(timeout=timeout)
 
 
 def _summarize_topic_llm(topic: str, batch: str) -> str | None:
@@ -352,20 +354,25 @@ class LiveSession:
         self.last_rx = time.monotonic()
 
     def shutdown(self) -> str | None:
-        """Chốt câu dở, chờ pass 2 xả hàng đợi, lưu transcript. Chạy trong thread."""
+        """Chốt câu dở, xả pass 2, lưu transcript. Chạy trong thread.
+
+        Timeout join RÚT NGẮN để Dừng phản hồi nhanh (bug thực địa: shutdown chậm
+        làm client bắn deadline 30s → mất mapping audio OPFS). Ưu tiên: decode câu
+        cuối + pass-2 (ảnh hưởng text lưu) chờ vừa phải; revise/ident/condense là
+        cải thiện nền → cắt ngắn, chưa xong thì bỏ, không chặn lưu."""
         self.stop_event.set()
-        self._decode_thread.join(timeout=30)
+        self._decode_thread.join(timeout=15)
         if self._ident_thread is not None and self._ident_thread.is_alive():
             self.ident_q.put(None)
-            self._ident_thread.join(timeout=10)
+            self._ident_thread.join(timeout=3)
         if self._revise_thread.is_alive():
             # Drain revision TRƯỚC pass 2 — câu revise xong còn kịp vào correction_q.
             self.revision_q.put(None)
-            self._revise_thread.join(timeout=20)
+            self._revise_thread.join(timeout=3)
         if self.correct_enabled:
             self.correction_q.put(None)
-            self._correct_thread.join(timeout=12)
-        self.tracker.close()  # chờ condense nền xong — không rò thread sau Dừng
+            self._correct_thread.join(timeout=8)
+        self.tracker.close(timeout=2)  # condense nền: bỏ dở khi Dừng, không chờ 25s
         return self._save()
 
     # ── Helpers ───────────────────────────────────────────────────────────

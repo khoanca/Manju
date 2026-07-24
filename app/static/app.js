@@ -1614,7 +1614,9 @@ function stopLive(){
   setPill("ĐANG LƯU…", false); setWave("off"); recHint.textContent = "Đang chốt câu cuối & lưu…";
   stopAudio();
   if (live.conn.sendJSON({ type:"stop" })){
-    live.deadline = setTimeout(() => { endLive(); showScreen("home"); }, 30000);
+    // 60s (không 30): nếu shutdown server chậm hơn 30s, teardown sớm sẽ bỏ qua
+    // "saved" → rememberOpfs không chạy → audio OPFS mồ côi (không nghe lại được).
+    live.deadline = setTimeout(() => { endLive(); showScreen("home"); }, 60000);
   } else {
     // Đang mất kết nối: server giữ phiên và sẽ tự chốt & lưu sau ~60s.
     if (live.opfs) live.opfs.finish();
