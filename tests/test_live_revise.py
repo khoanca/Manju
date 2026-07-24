@@ -243,6 +243,22 @@ def test_refresh_bias_error_keeps_old_spec(make_session, monkeypatch):
     assert session.glossary == old_gloss
 
 
+def test_save_collapses_loop_across_utterance_boundary(make_session):
+    # live-2341: mlx cắt chuỗi thoái hoá "NYE NYE NYE NYE" qua ranh giới 2
+    # utterance → mỗi câu chỉ 2 NYE, lọt bộ lọc per-segment. _save gom lặp
+    # toàn văn sau khi nối nên bản lưu không còn chuỗi lặp.
+    session, _, _ = make_session()
+    session.sentences = {1: "nhiều chủ đề khác nhau NYE NYE", 2: "NYE NYE Cái test mình"}
+    session.raw_sentences = dict(session.sentences)
+
+    tid = session._save()
+    assert tid is not None
+    row = db.read_transcript(tid)
+    assert row is not None
+    assert "NYE NYE NYE" not in row["text"]
+    assert "NYE" in row["text"]  # giữ 1 lần, không drop nội dung thật quanh nó
+
+
 def test_title_used_as_transcript_name(make_session):
     eng = FakeEngine([engines.DecodeResult(LONG, min_logprob=-0.2)])
     session, _, _ = make_session({"title": "Họp sprint 12"}, engine=eng)

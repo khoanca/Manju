@@ -671,7 +671,11 @@ class LiveSession:
     def _save(self) -> str | None:
         pcm = self._close_recording()
         order = sorted(self.sentences)
-        text = " ".join(self.sentences[k] for k in order).strip()
+        # Gom lặp TOÀN VĂN trước khi lưu: bộ lọc live chỉ soi từng segment nên
+        # loop thoái hoá vắt qua ranh giới 2 utterance ("NYE NYE" | "NYE NYE" →
+        # 4×NYE, live-2341) lọt hết ngưỡng per-segment. collapse_loops trên chuỗi
+        # đã nối bắt được (tất định, không đụng câu thật). Xem app/cleanup.py.
+        text = engines.collapse_loops(" ".join(self.sentences[k] for k in order)).strip()
         if not text:
             return None
         raw = " ".join(self.raw_sentences[k] for k in order).strip()

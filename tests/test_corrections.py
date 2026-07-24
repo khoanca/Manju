@@ -135,6 +135,21 @@ def test_extract_pairs_transliteration():
     assert pairs == [("cu bơ nét", "Kubernetes")]
 
 
+def test_extract_pairs_skips_common_word_wrong():
+    # Sửa cục bộ 1 câu ("thằng"→"từng", "quá"→"mà") KHÔNG được thành cặp: `wrong`
+    # là từ phổ thông → find-replace toàn cục sẽ phá câu đúng khắp nơi (live-2341).
+    assert extract_pairs("thằng đó nói quá trời", "từng đó nói mà trời") == []
+
+
+def test_is_risky_wrong_blocks_common_keeps_transliteration():
+    from app import corrections
+
+    assert corrections.is_risky_wrong("quá")  # từ thường
+    assert corrections.is_risky_wrong("lên đi")  # cụm toàn từ thường
+    assert not corrections.is_risky_wrong("cuba nết")  # phiên âm sai thuật ngữ
+    assert not corrections.is_risky_wrong("Thành dụng")  # có token lạ ("dụng")
+
+
 def test_extract_pairs_full_rewrite_returns_nothing():
     # Viết lại toàn bộ câu (văn phong) → span dài/khác hẳn → 0 cặp (AC3)
     pairs = extract_pairs(

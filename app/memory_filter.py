@@ -32,6 +32,8 @@ def _compile(wrong: str, right: str) -> tuple[re.Pattern[str], str] | None:
         return None
     if wrong.casefold() == right.casefold():
         return None
+    if corrections.is_risky_wrong(wrong):
+        return None  # `wrong` toàn từ phổ thông → thay toàn cục phá câu thật
     # Khớp cả cụm nhiều từ, cho phép khoảng trắng co giãn giữa các từ; ranh giới
     # không-phải-chữ hai đầu để "in voi" không dính trong "in voice".
     tokens = [re.escape(t) for t in wrong.split()]

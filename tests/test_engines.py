@@ -198,6 +198,28 @@ def test_decode_scored_min_logprob_ignores_filtered_segments():
     assert result.words == ()
 
 
+def test_decode_scored_drops_loop_split_across_segments():
+    # live-2341: Whisper bịa "NYE NYE NYE NYE" khi im lặng, mlx cắt thành 2
+    # segment nội bộ 2-token → mỗi cái qua keep_segment (cần ≥3), chỉ lộ khi nối.
+    # Cả utterance là loop → drop hẳn (sub trống vì người dùng không nói gì).
+    segments = [mlx_segment(" NYE NYE", -0.5), mlx_segment(" NYE NYE", -0.5)]
+    eng = make_mlx_engine(lambda audio, **kw: {"segments": segments})
+
+    result = eng.decode_scored(AUDIO, engines.DecodeSpec(language="vi"), final=True)
+
+    assert result.text == ""
+
+
+def test_decode_scored_keeps_real_content_around_cross_segment_loop():
+    segments = [mlx_segment(" khác nhau NYE NYE", -0.5), mlx_segment(" NYE NYE Cái test", -0.5)]
+    eng = make_mlx_engine(lambda audio, **kw: {"segments": segments})
+
+    result = eng.decode_scored(AUDIO, engines.DecodeSpec(language="vi"), final=True)
+
+    assert "NYE NYE NYE" not in result.text
+    assert result.text == "khác nhau NYE Cái test"
+
+
 def test_decode_scored_defaults_when_no_segment_kept():
     eng = make_mlx_engine(lambda audio, **kw: {"segments": [mlx_segment("bịa", -1.5, 0.9)]})
 

@@ -22,6 +22,15 @@ def test_apply_counts_all_hits_case_insensitive():
     assert hits == 2
 
 
+def test_compile_skips_risky_common_word_pair():
+    # Cặp `wrong` toàn từ phổ thông ("thằng"→"từng") bị bỏ khi biên dịch ký ức →
+    # không băm câu thật, dù cặp lỡ nằm trong DB approved.
+    mem = memory_filter.build_memory([("thằng", "từng"), ("cuba nết", "kubernetes")])
+    out, hits = memory_filter.apply_memory("thằng đó xài cuba nết", mem)
+    assert out == "thằng đó xài kubernetes"
+    assert hits == 1
+
+
 def test_boundary_avoids_partial_word_match():
     # "voi" không được dính bên trong "voiceover".
     mem = memory_filter.build_memory([("voi", "voice")])

@@ -33,12 +33,36 @@ def _clean(tokens: list[str]) -> str:
     return " ".join(w for w in words if w)
 
 
+# Từ tiếng Việt phổ thông. Cặp mà `wrong` CHỈ gồm các từ này thì "sửa" nó = thay
+# toàn cục một từ thật ở MỌI ngữ cảnh ("thằng"→"từng", "quá"→"mà", "tức"→"tick"):
+# một lần user sửa trong 1 câu biến thành find-replace phá câu đúng khắp nơi. Cặp
+# sửa lỗi tốt có `wrong` là phiên âm sai thuật ngữ (≥1 token lạ, vd "cuba nết").
+COMMON_VI = frozenset(
+    "a à á ạ ả ã ai anh ăn ấy bà bạn bao bây bên bị bó bởi các cái cần cho chỉ chị "
+    "chưa chứ chúng có con còn của cứ cũng đã đang đây đâu để đến đi điều đó đủ được "
+    "em gì giờ hay họ hơn khi kia không là lại làm lắm lên mà mày mình một mới nào "
+    "này nên nếu nó nữa người nhé nhiều như những ông ơi phải quá ra rất rồi sao sẽ "
+    "ta tao thằng theo thế thì thôi tôi tốt trời tức và vào vậy vì việc với xong "
+    "xuống ừ".split()
+)
+
+
+def is_risky_wrong(wrong: str) -> bool:
+    """True nếu `wrong` chỉ gồm từ tiếng Việt phổ thông → thay toàn cục sẽ phá
+    câu thật. Dùng để KHÔNG trích/áp/duyệt cặp như vậy (nguồn + memory_filter)."""
+    toks = [t.strip(string.punctuation).casefold() for t in wrong.split()]
+    toks = [t for t in toks if t]
+    return bool(toks) and all(t in COMMON_VI for t in toks)
+
+
 def _is_noise(wrong: str, right: str) -> bool:
     """True nếu cặp là văn phong/vô nghĩa, không đáng vào thư viện (AC3)."""
     if not wrong or not right:
         return True  # một bên rỗng sau khi strip dấu câu
     if wrong.casefold() == right.casefold():
         return True  # chỉ khác hoa-thường hoặc dấu câu
+    if is_risky_wrong(wrong):
+        return True  # `wrong` toàn từ phổ thông → thay toàn cục phá câu thật
     if max(len(wrong.split()), len(right.split())) > MAX_SPAN:
         return True  # span quá dài — user viết lại câu
     if len(wrong.split()) == len(right.split()):

@@ -291,19 +291,32 @@ class Engine(ABC):
         ...
 
 
+def _clean_utterance(texts: list[str]) -> str:
+    """Nối các segment nội bộ của 1 utterance rồi gom lặp TRÊN CHUỖI ĐÃ NỐI.
+    keep_segment/collapse_loops soi từng segment không thấy loop vắt qua ranh
+    giới 2 segment ("NYE NYE" | "NYE NYE" → 4×NYE, live-2341): mỗi segment chỉ 2
+    token, dưới ngưỡng; chỉ lộ khi nối. Cả utterance chỉ là token/digit-loop →
+    trả rỗng (rác im lặng, live xoá dòng)."""
+    joined = "".join(texts)
+    if _is_token_loop(joined) or _is_digit_loop(joined):
+        return ""
+    return collapse_loops(joined).strip()
+
+
 def _mlx_scored(segments: list[dict], *, with_words: bool) -> DecodeResult:
     kept = [
         seg
         for seg in segments
         if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
     ]
+    text = _clean_utterance([seg["text"] for seg in kept])
     words: tuple[tuple[str, float], ...] = ()
-    if with_words:
+    if with_words and text:
         words = tuple(
             (w["word"], float(w["probability"])) for seg in kept for w in seg.get("words", [])
         )
     return DecodeResult(
-        "".join(collapse_loops(seg["text"]) for seg in kept).strip(),
+        text,
         min((float(seg.get("avg_logprob", 0.0)) for seg in kept), default=0.0),
         words,
     )
@@ -320,15 +333,16 @@ def _fw_scored(segments: Iterable[object], *, with_words: bool) -> DecodeResult:
             getattr(seg, "avg_logprob", 0.0),
         )
     ]
+    text = _clean_utterance([str(getattr(seg, "text", "")) for seg in kept])
     words: tuple[tuple[str, float], ...] = ()
-    if with_words:
+    if with_words and text:
         words = tuple(
             (str(getattr(w, "word", "")), float(getattr(w, "probability", 0.0)))
             for seg in kept
             for w in (getattr(seg, "words", None) or [])
         )
     return DecodeResult(
-        "".join(collapse_loops(str(getattr(seg, "text", ""))) for seg in kept).strip(),
+        text,
         min((float(getattr(seg, "avg_logprob", 0.0)) for seg in kept), default=0.0),
         words,
     )
