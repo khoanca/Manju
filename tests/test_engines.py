@@ -14,6 +14,7 @@ def make_mlx_engine(fake_transcribe) -> engines.MlxEngine:
     eng = engines.MlxEngine.__new__(engines.MlxEngine)
     eng._mlx = SimpleNamespace(transcribe=fake_transcribe)
     eng._repo = "fake/repo"
+    eng._upload_repo = "fake/upload-repo"
     eng.info = engines.EngineInfo("mlx", "fake (mlx)")
     return eng
 
@@ -399,7 +400,7 @@ def test_cuda_revise_returns_none(monkeypatch):
     assert model.calls == []
 
 
-def test_mlx_revise_passes_beam_and_zero_temperature():
+def test_mlx_revise_uses_upload_model_and_temperature_fallback():
     calls: list[dict] = []
 
     def fake_transcribe(audio, **kw):
@@ -411,14 +412,16 @@ def test_mlx_revise_passes_beam_and_zero_temperature():
     text = eng.revise(AUDIO, engines.DecodeSpec(language="vi"))
 
     assert text == "chốt lại"
-    assert calls[0]["beam_size"] == 5
-    assert calls[0]["temperature"] == 0.0
+    # Revise dùng large-v3 full (chính xác hơn turbo live), temperature fallback,
+    # KHÔNG beam (mlx-whisper 0.4.3 chưa hỗ trợ).
+    assert calls[0]["path_or_hf_repo"] == eng._upload_repo
+    assert calls[0]["temperature"] == (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    assert "beam_size" not in calls[0]
 
 
-def test_mlx_revise_returns_none_when_beam_unsupported():
-    # mlx-whisper 0.4.3: beam search chưa implement → transcribe raise.
+def test_mlx_revise_returns_none_on_error():
     def fake_transcribe(audio, **kw):
-        raise NotImplementedError("Beam search decoder is not yet implemented")
+        raise RuntimeError("decode failed")
 
     eng = make_mlx_engine(fake_transcribe)
 

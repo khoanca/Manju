@@ -375,12 +375,25 @@ class MlxEngine(Engine):
 
         self._mlx = mlx_whisper
         self._repo = os.environ.get("LIVE_MLX_MODEL", "mlx-community/whisper-large-v3-turbo")
+        # Upload/reanalyze KHÔNG realtime → dùng large-v3 full (32 lớp decoder,
+        # chính xác hơn turbo trên audio khó + code-switching Việt-Anh); chậm hơn
+        # ~2-3x nhưng không có ràng buộc thời gian thực. Live vẫn giữ turbo.
+        self._upload_repo = os.environ.get("UPLOAD_MLX_MODEL", "mlx-community/whisper-large-v3-mlx")
+        # US-811: revise nền câu live confidence thấp bằng large-v3 full. MẶC ĐỊNH
+        # TẮT — thực địa (2026-07-25) revise MLX phá live: (1) nạp thêm model 3GB
+        # thứ 2 + giữ chung _decode_lock ~4-5s/lần → _finalize (blocking lock) khựng,
+        # partial rơi DecodeBusy → phụ đề đứng hình; (2) temperature fallback tới 1.0
+        # sampling ra rác ("ừ ừ") rồi GHI ĐÈ câu final tốt. Chỉ bật khi mlx-whisper
+        # có beam (yield lock rẻ) hoặc chấp nhận đánh đổi: MANJU_MLX_REVISE=1.
+        self.supports_revise = os.environ.get("MANJU_MLX_REVISE", "0") == "1"
         self.info = EngineInfo("mlx", f"{self._repo.rsplit('/', 1)[-1]} (mlx)")
 
-    def _transcribe(self, audio, spec: DecodeSpec, final: bool, *, word_timestamps: bool = False) -> dict:
+    def _transcribe(
+        self, audio, spec: DecodeSpec, final: bool, *, word_timestamps: bool = False, repo: str | None = None
+    ) -> dict:
         return self._mlx.transcribe(
             audio,
-            path_or_hf_repo=self._repo,
+            path_or_hf_repo=repo or self._repo,
             language=spec.language,
             condition_on_previous_text=False,
             initial_prompt=spec.glossary or None,
@@ -396,20 +409,20 @@ class MlxEngine(Engine):
         return _mlx_scored(result["segments"], with_words=with_words)
 
     def revise(self, audio: np.ndarray, spec: DecodeSpec) -> str | None:
-        # mlx-whisper 0.4.3 raise NotImplementedError với beam_size (chưa có beam
-        # search) → except trả None; khi upstream bổ sung: bật supports_revise=True. temperature phải
-        # 0.0: DecodingOptions cấm trộn beam + sampling.
+        # Re-decode câu live confidence thấp bằng large-v3 full (nhiều lớp decoder
+        # hơn turbo → thuật ngữ/câu khó chính xác hơn) + temperature fallback cho
+        # đoạn khó. KHÔNG beam (mlx-whisper 0.4.3 raise NotImplementedError). Lock
+        # non-blocking: engine bận vì live thì bỏ, để live luôn thắng lock.
         if not _decode_lock.acquire(blocking=False):
             return None
         try:
             result = self._mlx.transcribe(
                 audio,
-                path_or_hf_repo=self._repo,
+                path_or_hf_repo=self._upload_repo,
                 language=spec.language,
                 condition_on_previous_text=False,
                 initial_prompt=spec.glossary or None,
-                temperature=0.0,
-                beam_size=5,
+                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
                 verbose=None,
             )
             return _mlx_scored(result["segments"], with_words=False).text
@@ -422,7 +435,9 @@ class MlxEngine(Engine):
         # Giữ lock suốt file: Metal không share được với decode live. Upload
         # dài sẽ chặn partial của phiên live đang mở — chấp nhận (turbo nhanh).
         with _decode_lock:
-            result = self._transcribe(str(path), spec, final=True, word_timestamps=spec.flag_words)
+            result = self._transcribe(
+                str(path), spec, final=True, word_timestamps=spec.flag_words, repo=self._upload_repo
+            )
         segs: list[dict] = []
         for seg in result["segments"]:
             if not keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0)):
@@ -443,7 +458,7 @@ class MlxEngine(Engine):
 
     def raw_file_segments(self, path, spec):
         with _decode_lock:
-            result = self._transcribe(str(path), spec, final=True, word_timestamps=False)
+            result = self._transcribe(str(path), spec, final=True, word_timestamps=False, repo=self._upload_repo)
         return [
             {
                 "text": str(seg["text"]),
