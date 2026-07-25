@@ -24,6 +24,11 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.15.21",
 ]
+# Chỉ cho benchmark ASR (scripts/bench_cloud_stt.py) — không nằm trong deps
+# runtime để `uv sync` mặc định vẫn gọn. Cài khi cần: `uv sync --group bench`.
+bench = [
+    "mlx-qwen3-asr>=0.3.5",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
