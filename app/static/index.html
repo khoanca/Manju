@@ -150,8 +150,16 @@
   .start-card input, .start-card textarea{ border:1px solid var(--line); border-radius:12px;
                padding:10px 12px; font-size:14px; background:var(--card-2); outline:none; resize:vertical; }
   .start-card input:focus, .start-card textarea:focus{ border-color:var(--accent); }
-  .mt-parts{ display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:2px; }
-  .mt-parts label{ display:flex; align-items:center; gap:6px; font-size:14px; cursor:pointer; }
+  .mt-dd{ border:1px solid var(--line); border-radius:12px; background:var(--card-2); }
+  .mt-dd[open]{ border-color:var(--accent); }
+  .mt-dd summary{ list-style:none; cursor:pointer; padding:10px 12px; font-size:14px;
+               color:var(--fg); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .mt-dd summary::-webkit-details-marker{ display:none; }
+  .mt-dd summary::after{ content:"⌄"; color:var(--muted); font-size:16px; line-height:1; }
+  .mt-dd[open] summary::after{ content:"⌃"; }
+  .mt-dd summary .ph{ color:var(--muted); }
+  .mt-parts{ display:flex; flex-direction:column; gap:8px; padding:2px 12px 12px; max-height:200px; overflow-y:auto; }
+  .mt-parts label{ display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer; }
   .start-card .go-btn{ margin-top:10px; }
 
   .rec-controls{ display:flex; gap:14px; margin-top:20px; }
@@ -537,7 +545,10 @@
       <span class="f-lbl">Agenda</span>
       <textarea id="mtAgenda" rows="2" placeholder="Nội dung dự kiến (tuỳ chọn)…"></textarea>
       <span class="f-lbl hidden" id="mtPartLbl">Người tham gia</span>
-      <div class="mt-parts hidden" id="mtParticipants"></div>
+      <details class="mt-dd hidden" id="mtPartDD">
+        <summary><span id="mtPartSummary" class="ph">Chọn người tham gia…</span></summary>
+        <div class="mt-parts" id="mtParticipants"></div>
+      </details>
       <button class="go-btn" id="startBtn">Bắt đầu</button>
     </div>
 

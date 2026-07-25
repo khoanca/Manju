@@ -1457,7 +1457,7 @@ let partList = [];   // speakers đang hiện checkbox, giữ nguyên kiểu id
 async function loadParticipants(){
   const box = $("mtParticipants");
   box.innerHTML = ""; partList = [];
-  box.classList.add("hidden"); $("mtPartLbl").classList.add("hidden");
+  $("mtPartDD").classList.add("hidden"); $("mtPartLbl").classList.add("hidden");
   let arr = [];
   try { arr = await (await fetch("/api/speakers")).json(); } catch { return; }   // lỗi → ẩn list, vẫn cho Bắt đầu
   if (!arr.length) return;
@@ -1469,10 +1469,20 @@ async function loadParticipants(){
     const lb = document.createElement("label");
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.checked = savedIds.includes(String(s.id));
+    cb.onchange = updatePartSummary;
     lb.append(cb, " " + s.name);
     box.appendChild(lb);
   }
-  box.classList.remove("hidden"); $("mtPartLbl").classList.remove("hidden");
+  $("mtPartDD").classList.remove("hidden"); $("mtPartLbl").classList.remove("hidden");
+  updatePartSummary();
+}
+function updatePartSummary(){
+  const el = $("mtPartSummary");
+  const names = [];
+  $("mtParticipants").querySelectorAll("input").forEach((cb, i) => { if (cb.checked && partList[i]) names.push(partList[i].name); });
+  if (!names.length){ el.textContent = "Chọn người tham gia…"; el.classList.add("ph"); return; }
+  el.classList.remove("ph");
+  el.textContent = names.length <= 2 ? names.join(", ") : `${names.length} người tham gia`;
 }
 function checkedParticipants(){
   const ids = [];
