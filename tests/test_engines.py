@@ -226,7 +226,9 @@ def test_decode_scored_defaults_when_no_segment_kept():
 
     result = eng.decode_scored(AUDIO, engines.DecodeSpec(language="vi"), final=True)
 
-    assert result == engines.DecodeResult(text="", min_logprob=0.0, words=())
+    assert (result.text, result.min_logprob, result.words) == ("", 0.0, ())
+    # Telemetry (US-828) vẫn phản ánh segment BỊ DROP — truy phiên lỗi sau này.
+    assert result.max_no_speech_prob == 0.9
 
 
 def test_mlx_words_filled_only_when_flag_and_final():

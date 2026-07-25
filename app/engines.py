@@ -53,6 +53,11 @@ class DecodeResult:
     text: str
     min_logprob: float = 0.0  # min avg_logprob trên các segment GIỮ LẠI; 0.0 nếu không có
     words: tuple[tuple[str, float], ...] = ()  # (word, probability), chỉ khi flag_words + final
+    # Telemetry (US-828) — max trên TẤT CẢ segment (kể cả bị drop): truy phiên
+    # lỗi sau này không cần tái hiện. temperature = nấc cao nhất whisper đã dùng.
+    max_compression_ratio: float = 0.0
+    max_no_speech_prob: float = 0.0
+    temperature: float = 0.0
 
 
 class DecodeBusy(Exception):
@@ -84,12 +89,22 @@ _HALLUCINATION_RE_LEGACY = re.compile(
 # thoái hoá của Whisper lặp hàng chục–hàng trăm lần. Ngưỡng đặt cao để chỉ cắt
 # cái sau (thực địa 2026-07-20: "là em bán" + 224 lần "để").
 _LOOP_RUN_MIN = 6
+# Segment logprob dưới _SUSPECT_LOGPROB: run ×3 đã là loop — đo 2026-07-26 trên
+# 34 phiên: "đăng"×3 lp −0.57, "em môm cài"×3 lp −0.63 đều bịa; mọi stutter thật
+# ("nó nó nó", "vâng, vâng, vâng") đều lp tốt hơn → 0 false positive.
+_LOOP_RUN_MIN_SUSPECT = 3
+_SUSPECT_LOGPROB = -0.5
 _LOOP_TOKEN_MAXLEN = 4
 # Loop chu kỳ ≥2 token ("tick là tick là …", "sao mà sao mà …" — thực địa
-# live-1620): không thể là nhấn mạnh thật khi lặp nhiều lần, nên ngưỡng thấp
-# hơn period-1 nhưng vẫn ≥4 để chừa "từng case, từng case một".
+# live-1620): không thể là nhấn mạnh thật khi lặp nhiều lần. Period 2 giữ ≥4
+# ("chuyện gì"×3, "bỏ ra"×3 là nói thật); period ≥3 hạ xuống ≥3 — kiểm 0 false
+# positive trên toàn bộ transcript 2026-07-26 ("em môm cài"×3 là bịa).
 _CYCLE_MAX_PERIOD = 5
 _CYCLE_MIN_REPEAT = 4
+_CYCLE_MIN_REPEAT_LONG = 3
+# Whisper tự dùng cr>2.4 để retry nhiệt độ; segment cuối cùng vẫn cr cao là rác
+# chắc chắn (đo: degenerate 4.9–40.6 vs câu sạch ≤1.7). mlx trả sẵn per-window.
+_COMPRESSION_RATIO_MAX = 2.4
 # Lặp bên trong 1 token, không có khoảng trắng ("Hbrightbrightbright…" —
 # live-1653): đơn vị 2..12 ký tự lặp ≥4 lần → thu về 1. Câu thật không có dạng
 # này (không từ tiếng Việt/Anh nào là 1 khối lặp liền ≥4 lần).
@@ -107,7 +122,10 @@ def _norm_aligned(words: list[str]) -> list[str]:
 
 def _is_token_loop(text: str) -> bool:
     """Hallucination lặp token ("J. J. J.", "ừ ừ ừ ừ"): cả segment chỉ là 1 từ
-    ngắn lặp ≥3 lần. Câu thật không có dạng này — Whisper loop khi im lặng."""
+    ngắn lặp ≥3 lần. Câu thật không có dạng này — Whisper loop khi im lặng.
+    Cố ý KHÔNG nới sang "token áp đảo ≥90%": segment kiểu "để ×10 + bán" phải
+    collapse giữ "bán" chứ không drop; loop có token đuôi lệch ("Hải, "×74+"H")
+    đã bị gate compression_ratio trong keep_segment bắt."""
     tokens = _norm_tokens(text)
     if len(tokens) < 3:
         return False
@@ -126,7 +144,7 @@ def _is_digit_loop(text: str) -> bool:
     return digits >= 6 and digits / len(tokens) > 0.7
 
 
-def _cycle_run(norm: list[str], i: int) -> tuple[int, int]:
+def _cycle_run(norm: list[str], i: int, min_run: int = _LOOP_RUN_MIN) -> tuple[int, int]:
     """Tại vị trí i, tìm chu kỳ ngắn nhất lặp thoái hoá. Trả (period, repeats);
     period=0 nghĩa là không có loop đáng cắt. Period nhỏ nhất thắng."""
     n = len(norm)
@@ -136,23 +154,26 @@ def _cycle_run(norm: list[str], i: int) -> tuple[int, int]:
             r += 1
         if r < 2:
             continue
-        # period 1 giữ hành vi cũ: chỉ cắt token NGẮN lặp ≥6 (số/thán từ Whisper
-        # kẹt vòng), khỏi cắt nhấn mạnh dài. period ≥2 cần ≥4 chu kỳ.
-        if p == 1 and (r < _LOOP_RUN_MIN or len(norm[i]) > _LOOP_TOKEN_MAXLEN):
+        # period 1: chỉ cắt token NGẮN lặp ≥min_run (mặc định 6 — khỏi cắt nhấn
+        # mạnh thật; segment logprob thấp hạ xuống 3 qua _collapse_suspect).
+        if p == 1 and (r < min_run or len(norm[i]) > _LOOP_TOKEN_MAXLEN):
             continue
-        if p >= 2 and r < _CYCLE_MIN_REPEAT:
+        if p == 2 and r < _CYCLE_MIN_REPEAT:
+            continue
+        if p >= 3 and r < _CYCLE_MIN_REPEAT_LONG:
             continue
         return p, r
     return 0, 0
 
 
-def collapse_loops(text: str) -> str:
+def collapse_loops(text: str, min_run: int = _LOOP_RUN_MIN) -> str:
     """Cắt lặp thoái hoá, GIỮ phần câu thật xung quanh.
 
     Ba dạng loop của Whisper khi gặp noise/im lặng: token đơn lặp ("để để để…"),
     chu kỳ ≥2 token ("tick là tick là…"), và lặp bên trong 1 token dính liền
     ("Hbrightbright…"). Mỗi dạng thu về 1 lần thay vì drop cả segment (còn nội
-    dung thật đứng trước/sau).
+    dung thật đứng trước/sau). `min_run` là ngưỡng run period-1 (hạ khi segment
+    đáng ngờ — xem _collapse_suspect).
     """
     # Bước 1: lặp trong-token (không có space) — xử trước khi tách từ.
     intra = _INTRA_LOOP_RE.sub(r"\1", text)
@@ -162,7 +183,7 @@ def collapse_loops(text: str) -> str:
     collapsed = intra != text
     i = 0
     while i < len(words):
-        period, repeats = _cycle_run(norm, i)
+        period, repeats = _cycle_run(norm, i, min_run)
         if period:
             out.extend(words[i : i + period])  # giữ đúng 1 chu kỳ
             i += period * repeats
@@ -195,7 +216,15 @@ def strip_hallucination_phrases(text: str) -> tuple[str, list[str]]:
     return re.sub(r"\s{2,}", " ", stripped).strip(), removed
 
 
-def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
+def keep_segment(
+    text: str, no_speech_prob: float, avg_logprob: float, compression_ratio: float = 0.0
+) -> bool:
+    # cr>2.4 là chính ngưỡng Whisper dùng để retry nhiệt độ — kết quả CUỐI vẫn
+    # cr cao nghĩa là mọi nấc đều degenerate (mlx chấp nhận vô điều kiện nấc
+    # chót, đo 2026-07-26: rác 4.9–40.6 vs câu sạch ≤1.7). Default 0.0 giữ
+    # tương thích caller cũ chưa có cr.
+    if compression_ratio > _COMPRESSION_RATIO_MAX:
+        return False
     # Ngưỡng như logic nội bộ của Whisper: no_speech cao + logprob thấp = bịa.
     # Lưu ý: điều kiện AND này KHÔNG bắt được hallucination "tự tin"
     # (nsp=0.000, logprob=-0.98) — nên phải chặn thêm theo hình dạng text.
@@ -204,6 +233,14 @@ def keep_segment(text: str, no_speech_prob: float, avg_logprob: float) -> bool:
     if _is_token_loop(text) or _is_digit_loop(text):
         return False
     return not _HALLUCINATION_RE.search(text)
+
+
+def _collapse_suspect(text: str, avg_logprob: float) -> str:
+    """Segment logprob thấp: run ×3 token ngắn đã là loop ("đăng đăng đăng"
+    lp −0.57 là bịa; stutter thật đều lp tốt hơn −0.5 — đo 2026-07-26)."""
+    if avg_logprob < _SUSPECT_LOGPROB:
+        return collapse_loops(text, min_run=_LOOP_RUN_MIN_SUSPECT)
+    return text
 
 
 # ── Hành vi ASR-cleanup "bản cũ" (trước ffe38d2) — chỉ cho công cụ so sánh A/B ──
@@ -307,9 +344,16 @@ def _mlx_scored(segments: list[dict], *, with_words: bool) -> DecodeResult:
     kept = [
         seg
         for seg in segments
-        if keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0))
+        if keep_segment(
+            seg["text"],
+            seg.get("no_speech_prob", 0.0),
+            seg.get("avg_logprob", 0.0),
+            seg.get("compression_ratio", 0.0),
+        )
     ]
-    text = _clean_utterance([seg["text"] for seg in kept])
+    text = _clean_utterance(
+        [_collapse_suspect(seg["text"], seg.get("avg_logprob", 0.0)) for seg in kept]
+    )
     words: tuple[tuple[str, float], ...] = ()
     if with_words and text:
         words = tuple(
@@ -319,21 +363,35 @@ def _mlx_scored(segments: list[dict], *, with_words: bool) -> DecodeResult:
         text,
         min((float(seg.get("avg_logprob", 0.0)) for seg in kept), default=0.0),
         words,
+        max_compression_ratio=max(
+            (float(seg.get("compression_ratio", 0.0)) for seg in segments), default=0.0
+        ),
+        max_no_speech_prob=max(
+            (float(seg.get("no_speech_prob", 0.0)) for seg in segments), default=0.0
+        ),
+        temperature=max((float(seg.get("temperature", 0.0)) for seg in segments), default=0.0),
     )
 
 
 def _fw_scored(segments: Iterable[object], *, with_words: bool) -> DecodeResult:
     # getattr thay vì attribute: faster_whisper không ship type stubs (Segment/Word).
+    segs = list(segments)  # materialize: cần duyệt 2 lần (kept + telemetry)
     kept = [
         seg
-        for seg in segments
+        for seg in segs
         if keep_segment(
             str(getattr(seg, "text", "")),
             getattr(seg, "no_speech_prob", 0.0),
             getattr(seg, "avg_logprob", 0.0),
+            getattr(seg, "compression_ratio", 0.0),
         )
     ]
-    text = _clean_utterance([str(getattr(seg, "text", "")) for seg in kept])
+    text = _clean_utterance(
+        [
+            _collapse_suspect(str(getattr(seg, "text", "")), getattr(seg, "avg_logprob", 0.0))
+            for seg in kept
+        ]
+    )
     words: tuple[tuple[str, float], ...] = ()
     if with_words and text:
         words = tuple(
@@ -345,6 +403,13 @@ def _fw_scored(segments: Iterable[object], *, with_words: bool) -> DecodeResult:
         text,
         min((float(getattr(seg, "avg_logprob", 0.0)) for seg in kept), default=0.0),
         words,
+        max_compression_ratio=max(
+            (float(getattr(seg, "compression_ratio", 0.0)) for seg in segs), default=0.0
+        ),
+        max_no_speech_prob=max(
+            (float(getattr(seg, "no_speech_prob", 0.0)) for seg in segs), default=0.0
+        ),
+        temperature=max((float(getattr(seg, "temperature", 0.0)) for seg in segs), default=0.0),
     )
 
 
@@ -440,7 +505,12 @@ class MlxEngine(Engine):
             )
         segs: list[dict] = []
         for seg in result["segments"]:
-            if not keep_segment(seg["text"], seg.get("no_speech_prob", 0.0), seg.get("avg_logprob", 0.0)):
+            if not keep_segment(
+                seg["text"],
+                seg.get("no_speech_prob", 0.0),
+                seg.get("avg_logprob", 0.0),
+                seg.get("compression_ratio", 0.0),
+            ):
                 continue
             s: dict = {
                 "start": round(float(seg["start"]), 2),
@@ -464,6 +534,8 @@ class MlxEngine(Engine):
                 "text": str(seg["text"]),
                 "no_speech_prob": float(seg.get("no_speech_prob", 0.0)),
                 "avg_logprob": float(seg.get("avg_logprob", 0.0)),
+                "compression_ratio": float(seg.get("compression_ratio", 0.0)),
+                "temperature": float(seg.get("temperature", 0.0)),
             }
             for seg in result["segments"]
         ]
@@ -601,6 +673,8 @@ class FwEngine(Engine):
                 "text": str(getattr(seg, "text", "")),
                 "no_speech_prob": float(getattr(seg, "no_speech_prob", 0.0)),
                 "avg_logprob": float(getattr(seg, "avg_logprob", 0.0)),
+                "compression_ratio": float(getattr(seg, "compression_ratio", 0.0)),
+                "temperature": float(getattr(seg, "temperature", 0.0)),
             }
             for seg in segments
         ]

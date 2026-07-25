@@ -29,7 +29,7 @@ Giữ Whisper turbo + pass-2 (đã thắng mọi benchmark thay thế), sửa 3 
 | T-001 | Gate `compression_ratio > 2.4` trong `keep_segment` (mlx per-segment; fw qua getattr). Lưu ý cr là per-window: window degenerate rơi cả cụm — chấp nhận | US-824 | ‖ | app/engines.py | [ ] |
 | T-002 | Collapse cycle period≥3 repeat≥3 (`_CYCLE_MIN_REPEAT` tách theo period; đã kiểm 0 FP) | US-824 | ‖ | app/engines.py | [ ] |
 | T-003 | Collapse run period-1 ×3..5 khi segment `avg_logprob < −0.5` (bắt "đăng"×3, "em môm cài"; giữ stutter thật khi lp tốt) — luồng lp vào `_mlx_scored`/`_fw_scored` → collapse variant | US-824 | ‖ | app/engines.py | [ ] |
-| T-004 | Vá `_is_token_loop` bị token đuôi lệch đánh bại ("Hải, "×74 + "H"): ngưỡng ≥90% token trùng khi run ≥6 | US-824 | ‖ | app/engines.py | [ ] |
+| T-004 | ~~Nới `_is_token_loop` luật áp đảo ≥90%~~ **REVISED khi implement**: luật áp đảo drop cả segment "để ×10 + bán" (phải collapse giữ "bán" — test có sẵn bắt được); case "Hải, "×74+"H" thực địa có cr=25.95 → gate T-001 đã bắt. `_is_token_loop` giữ nguyên | US-824 | ‖ | app/engines.py | [x] qua T-001 |
 | T-005 | Fixture regression từ history-sweep: mọi chuỗi lặp đã lọt (verbatim) phải bị cắt; mọi stutter thật phải sống | US-824 | → T-001..004 (contract chữ ký chốt trước, viết song song được) | tests/test_engines_loops.py | [ ] |
 | T-006 | Live-final: `temperature=(0.0, 0.2)` + accept-or-drop (fail gate cr/lp → utterance rỗng, KHÔNG leo T≥0.4); upload/reanalyze giữ thang đủ | US-826 | → T-001 | app/engines.py | [ ] |
 | T-007 | Trim đuôi im lặng trước final decode: chỉ decode tới `spans[-1].end` + pad 0.3s (VAD spans đã có sẵn trong `_tick_open`) | US-826 | ‖ với T-006 | app/live.py | [ ] |
