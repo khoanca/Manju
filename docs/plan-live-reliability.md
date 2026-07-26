@@ -38,7 +38,7 @@ Giữ Whisper turbo + pass-2 (đã thắng mọi benchmark thay thế), sửa 3 
 | T-010 | Stop server: stop-final chỉ T=0 + bỏ word_timestamps; pass-2 câu cuối không kịp → lưu trước, thread nền apply correction vào DB sau `saved` (hết silent-drop); warm-up ping hủy được theo `stop_event` | US-825 | → T-006 | app/live.py, app/db.py | [x] |
 | T-011 | Stop client: rời màn ghi ngay khi bấm (giữ WS nền chờ `saved` cập nhật lịch sử); fix 2 nhánh lỗi quên `opfs.finish()` (deadline 60s + WS-chết-sau-stop, app.js:1531,1629) | US-825 | ‖ | app/static/app.js | [x] |
 | T-012 | Telemetry: `raw_segments[k]` thêm `temperature`, `compression_ratio`, `no_speech_prob` thật, `decode_wall_s` (DecodeResult mở rộng) | US-828 | → T-001 | app/engines.py, app/live.py | [x] |
-| T-013 | Verify e2e: chạy simulator (live_sim) trên `20260725-152501-live-1523.wav` + `20260721-165404-live-1653.wav` trước/sau — tiêu chí: 0 chuỗi lặp được lưu, stop-final wall <5s, câu sạch không đổi | US-824/825/826 | → tất cả | scripts hoặc tests (đánh dấu slow) | [ ] |
+| T-013 | Verify e2e (2026-07-26, drive LiveSession THẬT + MLX thật trên 1523.wav + 0208.wav): **A PASS** 0 lặp/0 echo/0 outro trong bản lưu; **C PASS** câu sạch giữ 105.6% từ; **D PASS** 0 partial lặp; **E PASS** telemetry đủ; T=0.0 mọi segment, decode ≤5.14s (cũ 18.5–25s). **B**: 6.19/7.54s do harness feed 3.4x RT dồn backlog 28s — chiếu realtime <5s, đo lại on-device (tech-debt). Anomaly vá luôn: nửa sau outro "không bỏ lỡ những video" thêm vào `_HALLUCINATION_RE` (DB scan 3/3 là bịa, 0 FP) + fixture. Trade chấp nhận: bản ghi nhiễu nặng 1523 giờ lưu gần rỗng thay vì 53 từ rác | US-824/825/826 | → tất cả | scratchpad t013_run.py | [x] |
 
 ## Stacked PRs (ước tính tổng ~570 dòng > 400 → bắt buộc tách)
 

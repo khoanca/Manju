@@ -31,3 +31,5 @@ AST re-audit clean, 27 tests pass, ruff + mypy clean.
 ### Known gaps
 
 - [x] Test/lint/typecheck — đã cấu hình 2026-07-11: pytest (27 tests, `tests/`), ruff, mypy (pyproject.toml)
+- [ ] US-825 (FR-9): stop_wall đo 6.19/7.54s trong harness feed 3.4x realtime (backlog dồn 28s) — chiếu realtime <5s nhưng là ngoại suy. Đo lại 1 lần trên phiên live thật (telemetry decode_wall_s đã có trong raw_segments); nếu vẫn >5s: hạ MAX_UTTERANCE_S hoặc stop-final 1 nấc T=0. UI stop đã tức thời phía client, số này chỉ là lưu nền.
+- [ ] US-825: nhánh `_persist_late_correction` ghi đè DB chưa được exercise trong T-013 (mọi correction trả changed=False qua OpenRouter) — sẽ tự kích hoạt khi Ollama bật lại và pass-2 thật sự sửa câu; theo dõi lần live đầu.

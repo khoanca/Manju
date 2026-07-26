@@ -71,7 +71,10 @@ _decode_lock = threading.Lock()
 _HALLUCINATION_RE = re.compile(
     r"ghiền mì gõ|subscribe|đăng k[íý] .{0,25}kênh|hãy đăng k[íý]|like và chia sẻ"
     r"|cảm ơn các bạn đã (xem|theo dõi|lắng nghe)|hẹn gặp lại các bạn"
-    r"|thanks for watching|please like and",
+    r"|thanks for watching|please like and"
+    # Nửa sau outro "hãy đăng ký kênh ĐỂ KHÔNG BỎ LỠ NHỮNG VIDEO HẤP DẪN" hay
+    # xuất hiện MỘT MÌNH (T-013 2026-07-26: lọt cả 3 lần trong DB, 0 câu thật).
+    r"|không bỏ lỡ những video|video hấp dẫn",
     re.IGNORECASE,
 )
 

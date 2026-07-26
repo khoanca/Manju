@@ -233,3 +233,15 @@ def test_legacy_keep_segment_keeps_hai_loop():
     # Legacy không có cr gate → "Hải, "×74+"H" vẫn lọt (đúng hành vi cũ để so
     # A/B); nếu _is_token_loop bị nới sang dominance thì test này đỏ.
     assert engines.keep_segment_legacy("Hải, " * 74 + "H", 0.0, -0.145) is True
+
+
+def test_outro_second_half_dropped_standalone():
+    # T-013 (2026-07-26): nửa sau outro YouTube xuất hiện MỘT MÌNH — lp/cr/nsp
+    # đều "sạch" (lp -0.63, cr 0.84, nsp 0.0) nên chỉ regex bắt được. DB scan:
+    # 3/3 lần xuất hiện đều là bịa, 0 câu họp thật.
+    assert engines.keep_segment("Để không bỏ lỡ những video hấp dẫn", 0.0, -0.6274, 0.84) is False
+    assert engines.keep_segment("để không bỏ lỡ những video mới nhất", 0.0, -0.3) is False
+    # Câu họp thật nói về "bỏ lỡ" (không có "video") phải sống.
+    assert engines.keep_segment("ghi âm đủ thì mình không bỏ lỡ thông tin cuộc họp", 0.0, -0.3) is True
+    # Legacy (A/B tool) giữ hành vi cũ: chưa có pattern này.
+    assert engines.keep_segment_legacy("Để không bỏ lỡ những video hấp dẫn", 0.0, -0.6274) is True
