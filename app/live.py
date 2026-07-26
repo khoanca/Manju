@@ -15,8 +15,6 @@ import queue
 import threading
 import time
 import uuid
-from collections import deque
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,8 +22,8 @@ import numpy as np
 from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from app import corrections, db, denoise, diarize, engines, memory_filter, transcribe
-from app.correct import LlmOpts, correct_sentence, openrouter_enabled, summarize_topic
+from app import corrections, db, denoise, engines, transcribe
+from app.correct import LlmOpts, correct_sentence, openrouter_enabled
 
 SAMPLE_RATE = 16000
 TICK_S = 1.2  # nhịp vòng decode
@@ -38,15 +36,13 @@ MAX_UTTERANCE_S = 28.0  # nói liên tục quá → ép chốt câu (Whisper win
 NO_AUDIO_TIMEOUT_S = 2.0  # mic ngừng gửi frame → coi như hết câu
 CORRECTION_BACKLOG_MAX = 5  # hàng đợi pass 2 dồn quá → bỏ qua câu mới
 MIN_CORRECT_CHARS = 10  # câu quá ngắn không đáng gọi LLM
-# 2048→4096: prompt pass 2 giờ kèm ngữ cảnh đang diễn ra (topic + K câu recent,
-# US-805) nên 2048 dễ tràn khi câu dài + glossary + pairs; vẫn ctx nhỏ cho nhanh
-# (KHÔNG kế thừa config server — num_ctx phải set mọi request kẻo tràn RAM).
+# num_ctx phải set mọi request kẻo tràn RAM (KHÔNG kế thừa config server).
 CORRECT_NUM_CTX = 4096
 CORRECT_TIMEOUT_S = 20.0  # câu đơn phải kịp subtitle — không chờ như full-text
-CONTEXT_RECENT_K = 6  # số câu final gần nhất giữ làm ngữ cảnh pass 2
-CONTEXT_CONDENSE_EVERY = 8  # đủ chừng này câu mới thì condense topic 1 lần
-CONTEXT_TOPIC_NUM_CTX = 2048  # condense chỉ tóm vài câu → ctx nhỏ
-CONTEXT_TOPIC_TIMEOUT_S = 20.0  # condense chạy nền nhưng không để treo lâu
+# US-826: đuôi im lặng/nhiễu sau điểm speech cuối là thứ đẻ ra hallucination
+# ("đăng đăng đăng") — final chỉ decode tới hết speech + pad này. 0.3s theo đo
+# sơ bộ bench 2026-07-21 (pad 0.3 khử hết utterance hỏng, xem project-state).
+FINAL_TAIL_PAD_S = 0.3
 # US-811: final min avg_logprob dưới ngưỡng → re-decode nền setting mạnh hơn.
 # −1.0 là sàn hallucination (keep_segment); −0.6 bắt câu "giữ lại nhưng run".
 REVISE_LOGPROB = -0.6
@@ -54,7 +50,6 @@ REVISION_BACKLOG_MAX = 2
 REVISE_ENABLED = os.environ.get("MANJU_REVISE", "1") != "0"
 UNCERTAIN_PROB = 0.5  # word probability dưới ngưỡng → báo pass 2 soát kỹ (US-812)
 UNCERTAIN_MAX = 8
-IDENT_BACKLOG_MAX = 3  # hàng đợi speaker-ID live (US-814) — đầy thì bỏ, chặn CPU
 
 # Silero mặc định cần lặng 2s mới tách đoạn — quá chậm cho subtitle; các giá trị
 # nhỏ ở đây chỉ để đo "đuôi buffer còn speech không", không dùng để cắt audio.
@@ -71,95 +66,6 @@ def _speech_spans(audio: np.ndarray) -> list[dict]:
     return get_speech_timestamps(audio, _VAD_OPTS, sampling_rate=SAMPLE_RATE)
 
 
-class ContextTracker:
-    """Biến ngữ cảnh đang diễn ra cho pass 2 (US-805).
-
-    Giữ K câu final gần nhất + `topic` (tóm tắt chủ đề, cập nhật dần). Mỗi
-    CONTEXT_CONDENSE_EVERY câu, condense chạy thread NỀN (không chặn subtitle):
-    gọi LLM tóm tắt chủ đề từ topic cũ + các câu mới. Đang condense thì câu mới
-    vẫn dùng topic cũ; LLM lỗi/timeout → giữ topic cũ (never-fail). Cuộc họp đổi
-    chủ đề giữa chừng thì topic tự trôi theo, pass 2 sửa thuật ngữ đúng mạch.
-    """
-
-    def __init__(
-        self,
-        summarize: Callable[[str, str], str | None] | None = None,
-        on_topic: Callable[[str], None] | None = None,
-        initial_topic: str = "",
-    ):
-        # `summarize` inject được để test không gọi LLM thật. `on_topic` báo
-        # topic mới cho caller (US-806: refresh bias); `initial_topic` mồi từ
-        # metadata cuộc họp (US-809) — bias được ngay từ câu đầu tiên.
-        self._summarize = summarize or _summarize_topic_llm
-        self._on_topic = on_topic
-        self._lock = threading.Lock()
-        self._recent: deque[str] = deque(maxlen=CONTEXT_RECENT_K)
-        self._new: list[str] = []  # câu dồn từ lần condense trước
-        self._topic = initial_topic
-        self._thread: threading.Thread | None = None
-        self._closed = False
-
-    def add(self, text: str) -> None:
-        """Nhận 1 câu final; đủ M câu mới (và không có condense đang chạy) → kick nền."""
-        with self._lock:
-            self._recent.append(text)
-            self._new.append(text)
-            busy = self._thread is not None and self._thread.is_alive()
-            if self._closed or busy or len(self._new) < CONTEXT_CONDENSE_EVERY:
-                return  # câu dồn tiếp trong _new, lần add sau thử lại
-            topic, batch = self._topic, " ".join(self._new)
-            self._new.clear()
-            self._thread = threading.Thread(
-                target=self._condense, args=(topic, batch), daemon=True
-            )
-            self._thread.start()
-
-    def _condense(self, topic: str, batch: str) -> None:
-        try:
-            new_topic = self._summarize(topic, batch)
-        except Exception:  # noqa: BLE001 — condense lỗi thì giữ topic cũ
-            return
-        if not new_topic:
-            return
-        with self._lock:
-            self._topic = new_topic
-        if self._on_topic is not None:
-            try:
-                self._on_topic(new_topic)
-            except Exception:  # noqa: BLE001 — callback lỗi không được giết condense
-                pass
-
-    def topic(self) -> str:
-        with self._lock:
-            return self._topic
-
-    def context(self) -> str:
-        """Chuỗi ngữ cảnh cho LlmOpts.context: topic (nếu có) + các câu recent."""
-        with self._lock:
-            parts = []
-            if self._topic:
-                parts.append("Chủ đề đang bàn: " + self._topic)
-            if self._recent:
-                parts.append(" ".join(self._recent))
-            return "\n".join(parts)
-
-    def close(self, timeout: float = CONTEXT_TOPIC_TIMEOUT_S + 5) -> None:
-        """Ngừng nhận condense mới. `timeout` nhỏ khi Dừng: kết quả condense chỉ
-        dùng cho bias/pass-2 TRONG phiên, lưu xong là bỏ → không đáng chờ tới 25s.
-        Thread condense là daemon nên bỏ dở không rò khi process thoát."""
-        with self._lock:
-            self._closed = True
-            thread = self._thread
-        if thread is not None:
-            thread.join(timeout=timeout)
-
-
-def _summarize_topic_llm(topic: str, batch: str) -> str | None:
-    return summarize_topic(
-        topic, batch, LlmOpts(num_ctx=CONTEXT_TOPIC_NUM_CTX, timeout=CONTEXT_TOPIC_TIMEOUT_S)
-    )
-
-
 def _setting_on(key: str) -> bool:
     try:
         return db.get_setting(key, "0") == "1"
@@ -174,25 +80,14 @@ class LiveSession:
         self.language = "en" if cfg.get("language") == "en" else "vi"
         self.engine = engines.get_engine()
         self.user_glossary = (cfg.get("glossary") or "").strip()
-        # US-809: title/agenda cuộc họp = topic khởi tạo — bias ngay từ câu đầu.
-        self.title = str(cfg.get("title") or "").strip()
-        agenda = str(cfg.get("agenda") or "").strip()
-        self.initial_topic = " ".join(p for p in (self.title, agenda) if p)
-        # US-808/814: participants → lexicon cá nhân + vùng miền vào bias.
-        self.participants = [str(p) for p in (cfg.get("participants") or []) if p]
-        self._personal = self._load_personal(self.participants)
-        self._personal_now = self._personal  # đổi khi speaker-ID thấy người khác nói
-        self._regions = self._load_regions(self.participants)
+        self.title = str(cfg.get("title") or "").strip()  # chỉ để đặt tên transcript
         self.flag_words = _setting_on("flag_words")  # US-812
-        # US-803/806: bias + few-shot chốt lúc start; topic mới (condense) hoặc
-        # đổi người nói sẽ rebuild qua _refresh_bias — glossary user thì bất biến.
-        self.glossary = corrections.build_bias(
-            self.user_glossary, personal=self._personal, topic=self.initial_topic,
-            regions=self._regions,
-        )
-        self.pairs = tuple(corrections.top_pairs(10, regions=self._regions))
-        # Lớp A: ký ức bản dịch cũ — chốt lúc start, thay xác định trước pass 2.
-        self.memory = memory_filter.from_library()
+        # US-826/827: prompt live CHỈ là glossary user gõ tay — bias tự động
+        # (lexicon nền, topic, personal, region) bị PARK: đo 2026-07-26 nó bị
+        # decoder echo lên subtitle khi im lặng/nhiễu ("kubernetes") và kéo
+        # no_speech_prob xuống 0 làm gate chống bịa mù. Xem plan-live-reliability.
+        self.glossary = self.user_glossary
+        self.pairs = tuple(corrections.top_pairs(10))
         self.correct_enabled = bool(cfg.get("correct", True))
         # Client mỏng (PWA) tự giữ audio trong OPFS trên thiết bị → server
         # không ghi WAV (PRD FR-4).
@@ -204,26 +99,6 @@ class LiveSession:
         self._init_recording()
         self._init_workers()
 
-    @staticmethod
-    def _load_personal(ids: list[str]) -> tuple[str, ...]:
-        if not ids:
-            return ()
-        try:
-            return tuple(db.personal_terms(ids))
-        except Exception:  # noqa: BLE001 — thư viện cá nhân hỏng không chặn phiên
-            return ()
-
-    @staticmethod
-    def _load_regions(ids: list[str]) -> tuple[str, ...]:
-        if not ids:
-            return ()
-        try:
-            rows = db.list_speakers()
-        except Exception:  # noqa: BLE001
-            return ()
-        sel = set(ids)
-        return tuple(sorted({r["region"] for r in rows if r["id"] in sel and r.get("region")}))
-
     def _pick_model(self, model: str | None) -> None:
         # Tier CPU: user chọn size model để cân tốc độ máy mình; GPU (mlx/cuda)
         # luôn dùng model mặc định của engine — nhanh và chính xác hơn mọi lựa chọn.
@@ -234,33 +109,12 @@ class LiveSession:
             override = None
             self.model_name = self.engine.info.model_name
         self._model_override = override
-        self.spec = self._make_spec(self.glossary)
-
-    def _make_spec(self, gloss: str) -> engines.DecodeSpec:
-        # initial_prompt CHỈ là danh sách term (user-first). TUYỆT ĐỐI không
-        # tiêm văn xuôi ("Chủ đề: ..."): Whisper nhại prompt văn xuôi vào
-        # subtitle khi im lặng/nhiễu (bug thực địa 2026-07-20 — "chủ đề",
-        # "J. J. J."). Topic chỉ dùng để XẾP HẠNG term trong build_bias.
-        return engines.DecodeSpec(
-            self.language, gloss, self._model_override, flag_words=self.flag_words,
+        # initial_prompt CHỈ là danh sách term user gõ. TUYỆT ĐỐI không tiêm
+        # văn xuôi: Whisper nhại prompt vào subtitle khi im lặng/nhiễu (bug
+        # thực địa 2026-07-20 "J. J. J."; đo lại 2026-07-26 với bias tự động).
+        self.spec = engines.DecodeSpec(
+            self.language, self.glossary, self._model_override, flag_words=self.flag_words,
         )
-
-    def _refresh_bias(self, topic: str) -> None:
-        """Rebuild bias khi topic đổi (US-806) / đổi người nói (US-814):
-        topic chỉ re-rank term thư viện, không vào prompt.
-
-        Gán attribute là atomic (GIL) + DecodeSpec frozen → decode/pass-2 luôn
-        thấy spec cũ hoặc mới trọn vẹn, không cần lock; lỗi → giữ nguyên."""
-        try:
-            gloss = corrections.build_bias(
-                self.user_glossary, personal=self._personal_now, topic=topic,
-                regions=self._regions,
-            )
-            spec = self._make_spec(gloss)
-            self.glossary = gloss
-            self.spec = spec
-        except Exception:  # noqa: BLE001 — never-fail, giữ bias cũ
-            pass
 
     def _init_buffers(self) -> None:
         self.buffer = bytearray()  # PCM16 của utterance đang mở (+ đuôi chờ khi idle)
@@ -273,6 +127,7 @@ class LiveSession:
         self.sentences: dict[int, str] = {}  # bản chính (corrected ghi đè final)
         self.raw_sentences: dict[int, str] = {}
         self.raw_scores: dict[int, float] = {}  # min_logprob mỗi utt (cho reanalyze)
+        self.raw_meta: dict[int, dict] = {}  # telemetry decode mỗi utt (US-828)
         self.utt_start: dict[int, float] = {}  # mốc bắt đầu mỗi câu (giây, tính từ đầu phiên)
         # US-813: denoise opt-in — chỉ thread decode đụng _clean (không cần lock);
         # bản WAV lưu vẫn là raw (feed ghi thẳng), artifact không dính vào file.
@@ -299,34 +154,10 @@ class LiveSession:
         self.stop_event = threading.Event()
         self.correction_q: queue.Queue = queue.Queue()
         self.revision_q: queue.Queue = queue.Queue()  # US-811
-        # Ngữ cảnh đang diễn ra (US-805) + topic mới → refresh bias (US-806).
-        self.tracker = ContextTracker(
-            on_topic=self._refresh_bias, initial_topic=self.initial_topic
-        )
         self.started_at = datetime.now(UTC).astimezone()
         self._decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
         self._correct_thread = threading.Thread(target=self._correct_loop, daemon=True)
         self._revise_thread = threading.Thread(target=self._revise_loop, daemon=True)
-        self._init_ident()
-
-    def _init_ident(self) -> None:
-        # US-814: speaker-ID live — chỉ bật khi có model + voiceprint đã enroll;
-        # thiếu gì cũng tắt im lặng, không chặn phiên.
-        self._active_spk: str | None = None
-        self._vps: list[tuple[str, np.ndarray]] = []
-        self._spk_names: dict[str, str] = {}
-        self.ident_q: queue.Queue = queue.Queue()
-        self._ident_thread: threading.Thread | None = None
-        # Opt-in (default OFF): embedding ONNX mỗi utterance tranh CPU/RAM với
-        # decode → tick chậm, cắt câu lệch (regression thực địa 2026-07-20).
-        try:
-            if _setting_on("live_ident") and diarize.models_present():
-                self._vps = diarize.to_np_voiceprints(db.load_voiceprints())
-                self._spk_names = db.speaker_names()
-        except Exception:  # noqa: BLE001
-            self._vps = []
-        if self._vps:
-            self._ident_thread = threading.Thread(target=self._ident_loop, daemon=True)
 
     # ── Gọi từ event loop (WS handler) ────────────────────────────────────
     def start(self) -> None:
@@ -335,8 +166,6 @@ class LiveSession:
             self._correct_thread.start()
         if REVISE_ENABLED and self.engine.supports_revise:
             self._revise_thread.start()
-        if self._ident_thread is not None:
-            self._ident_thread.start()
 
     def feed(self, data: bytes) -> None:
         with self.buf_lock:
@@ -362,9 +191,6 @@ class LiveSession:
         cải thiện nền → cắt ngắn, chưa xong thì bỏ, không chặn lưu."""
         self.stop_event.set()
         self._decode_thread.join(timeout=15)
-        if self._ident_thread is not None and self._ident_thread.is_alive():
-            self.ident_q.put(None)
-            self._ident_thread.join(timeout=3)
         if self._revise_thread.is_alive():
             # Drain revision TRƯỚC pass 2 — câu revise xong còn kịp vào correction_q.
             self.revision_q.put(None)
@@ -372,7 +198,6 @@ class LiveSession:
         if self.correct_enabled:
             self.correction_q.put(None)
             self._correct_thread.join(timeout=8)
-        self.tracker.close(timeout=2)  # condense nền: bỏ dở khi Dừng, không chờ 25s
         return self._save()
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -505,19 +330,35 @@ class LiveSession:
             return len(audio)
         return last_partial_samples
 
+    def _trim_tail(self, audio: np.ndarray) -> np.ndarray:
+        """US-826: final chỉ decode tới hết speech + FINAL_TAIL_PAD_S. Đuôi im
+        lặng/nhiễu là nguồn hallucination ("đăng đăng đăng") và là thứ đẩy
+        decode vào thang nhiệt độ 18-25s ngay lúc Stop. Không còn speech → rỗng
+        (khỏi decode luôn — final rỗng, client xoá dòng partial)."""
+        spans = _speech_spans(audio)
+        if not spans:
+            return audio[:0]
+        end = spans[-1]["end"] + int(FINAL_TAIL_PAD_S * SAMPLE_RATE)
+        return audio[: min(len(audio), end)]
+
     def _finalize(self, audio: np.ndarray, consumed: int | None = None) -> None:
         utt = self.utt_seq
         uncertain: tuple[str, ...] = ()
         low_conf = False
         words: list[list[object]] = []
+        clipped = self._trim_tail(audio)
+        started = time.monotonic()
         try:
-            res = self.engine.decode_scored(audio, self.spec, final=True)
-            text = res.text
-            # US-812: word confidence thấp → pass 2 biết chỗ cần soát kỹ.
-            uncertain = tuple(w.strip() for w, p in res.words if p < UNCERTAIN_PROB)[:UNCERTAIN_MAX]
-            low_conf = bool(text) and res.min_logprob < REVISE_LOGPROB
-            # US-823: gửi (word, prob) để UI gạch đỏ từ khả nghi (p < SUSPECT_PROB).
-            words = [[w, round(float(p), 3)] for w, p in res.words]
+            if clipped.size == 0:
+                text = ""
+            else:
+                res = self.engine.decode_scored(clipped, self.spec, final=True)
+                text = res.text
+                # US-812: word confidence thấp → pass 2 biết chỗ cần soát kỹ.
+                uncertain = tuple(w.strip() for w, p in res.words if p < UNCERTAIN_PROB)[:UNCERTAIN_MAX]
+                low_conf = bool(text) and res.min_logprob < REVISE_LOGPROB
+                # US-823: gửi (word, prob) để UI gạch đỏ từ khả nghi (p < SUSPECT_PROB).
+                words = [[w, round(float(p), 3)] for w, p in res.words]
         except Exception:  # noqa: BLE001
             text = ""
         # text rỗng (chỉ là noise) → client xoá dòng partial của utt này.
@@ -529,11 +370,13 @@ class LiveSession:
             self.sentences[utt] = text
             self.raw_sentences[utt] = text
             self.raw_scores[utt] = res.min_logprob
-            if self.correct_enabled:
-                # Mọi câu final (kể cả câu ngắn bỏ qua pass 2) đều nuôi tracker
-                # để topic bám sát mạch cuộc họp.
-                self.tracker.add(text)
-            self._queue_ident(utt, audio)
+            # US-828: telemetry per-utterance — truy phiên lỗi không cần tái hiện.
+            self.raw_meta[utt] = {
+                "no_speech_prob": round(res.max_no_speech_prob, 4),
+                "compression_ratio": round(res.max_compression_ratio, 2),
+                "temperature": res.temperature,
+                "decode_wall_s": round(time.monotonic() - started, 2),
+            }
             if (
                 REVISE_ENABLED
                 and self.engine.supports_revise
@@ -542,7 +385,7 @@ class LiveSession:
             ):
                 # US-811: revise nền xong mới pass 2 — LLM sửa trên text tốt nhất;
                 # backlog đầy thì rơi về path pass-2 thường, không nghẽn.
-                self.revision_q.put((utt, np.array(audio, copy=True), text, uncertain))
+                self.revision_q.put((utt, np.array(clipped, copy=True), text, uncertain))
             else:
                 self._queue_correction(utt, text, uncertain)
         # Chỉ bỏ phần đã chốt: audio sau đó (câu kế tiếp đã bắt đầu trong lúc
@@ -557,14 +400,6 @@ class LiveSession:
             and self.correction_q.qsize() < CORRECTION_BACKLOG_MAX
         ):
             self.correction_q.put((utt, text, uncertain))
-
-    def _queue_ident(self, utt: int, audio: np.ndarray) -> None:
-        if (
-            self._ident_thread is not None
-            and audio.size >= SAMPLE_RATE * diarize.LIVE_ID_MIN_S
-            and self.ident_q.qsize() < IDENT_BACKLOG_MAX
-        ):
-            self.ident_q.put((utt, np.array(audio, copy=True)))
 
     # ── Thread revise: re-decode câu confidence thấp bằng setting mạnh hơn ─
     def _revise_loop(self) -> None:
@@ -589,42 +424,6 @@ class LiveSession:
         except Exception:  # noqa: BLE001 — revise hỏng thì giữ bản final
             return None
 
-    # ── Thread speaker-ID: nhận diện người nói theo utterance final (US-814) ─
-    def _ident_loop(self) -> None:
-        while True:
-            item = self.ident_q.get()
-            if item is None:
-                return
-            utt, audio = item
-            sid = self._identify(audio)
-            if sid is None:
-                continue  # unknown → không tag, giữ bias hiện tại
-            name = self._spk_names.get(sid)
-            if name:
-                self._send({"type": "speaker", "utt": utt, "name": name})
-            if sid != self._active_spk:
-                # "Đổi người" chính là debounce — không rebuild mỗi utterance.
-                self._active_spk = sid
-                self._bias_speaker(sid)
-
-    def _identify(self, audio: np.ndarray) -> str | None:
-        try:
-            vec = diarize.embed_utterance(audio)
-            if vec is None:
-                return None
-            return diarize.best_match(vec, self._vps, diarize.LIVE_ID_THRESHOLD)
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _bias_speaker(self, sid: str) -> None:
-        # US-814: term của người ĐANG nói xếp trước phần participants còn lại.
-        try:
-            active = tuple(db.personal_terms([sid]))
-        except Exception:  # noqa: BLE001
-            return
-        self._personal_now = active + tuple(t for t in self._personal if t not in active)
-        self._refresh_bias(self.tracker.topic())
-
     # ── Thread pass 2: sửa thuật ngữ từng câu ─────────────────────────────
     def _correct_loop(self) -> None:
         if not openrouter_enabled():
@@ -636,26 +435,18 @@ class LiveSession:
             if item is None:
                 return
             utt, orig, uncertain = item
-            # Lớp A: thay xác định các cụm đã biết từ ký ức trước khi gọi LLM.
-            text, _ = memory_filter.apply_memory(orig, self.memory)
-            self.sentences[utt] = text
-            # Ngữ cảnh đang diễn ra (topic + câu gần nhất, US-805): LLM đoán
-            # thuật ngữ theo mạch cuộc họp ("can ban che quýt" → "kanban checklist").
-            context = self.tracker.context()
             fixed, ok = correct_sentence(
-                text,
+                orig,
                 LlmOpts(
                     glossary=self.glossary,
-                    context=context,
                     num_ctx=CORRECT_NUM_CTX,
                     timeout=CORRECT_TIMEOUT_S,
                     pairs=self.pairs,
                     uncertain=uncertain,
                 ),
             )
-            final = fixed if ok else text
+            final = fixed if ok else orig
             self.sentences[utt] = final
-            # "changed" so với bản ASR gốc — ký ức HOẶC pass 2 sửa đều tính.
             changed = final != orig
             self._send({"type": "corrected", "utt": utt, "text": final, "changed": changed})
 
@@ -692,12 +483,13 @@ class LiveSession:
             for k in order
         ]
         # ASR thô mỗi utterance (text như live nghe, trước pass 2) — reanalyze dùng
-        # THAY vì batch-decode lại (khác live). no_speech_prob không có ở live → 0.0.
+        # THAY vì batch-decode lại (khác live). Kèm telemetry US-828 (nsp thật,
+        # cr, temperature, wall) — trước đây nsp hardcode 0.0 nên không truy được.
         raw_segments = [
             {
                 "text": self.raw_sentences[k],
-                "no_speech_prob": 0.0,
                 "avg_logprob": round(self.raw_scores.get(k, 0.0), 4),
+                **self.raw_meta.get(k, {"no_speech_prob": 0.0}),
             }
             for k in order
             if k in self.raw_sentences

@@ -44,7 +44,7 @@ def make_session(tmp_path, monkeypatch):
     (tmp_path / "rec").mkdir()
     db.init()
 
-    def make(cfg: dict | None = None, engine: FakeEngine | None = None):
+    def make(cfg: dict | None = None, engine: FakeEngine | None = None, real_trim: bool = False):
         eng = engine or FakeEngine()
         monkeypatch.setattr(engines, "get_engine", lambda: eng)
         base = {"store_audio": False}
@@ -52,6 +52,11 @@ def make_session(tmp_path, monkeypatch):
         session = live.LiveSession(ws=SimpleNamespace(), loop=None, cfg=base)  # type: ignore[arg-type]
         sent: list[dict] = []
         session._send = sent.append  # type: ignore[method-assign]
+        if not real_trim:
+            # Test routing dùng audio zeros — VAD thật sẽ coi là im lặng và bỏ
+            # decode (US-826). Patch trim để cô lập unit routing; hành vi trim
+            # thật có test riêng bên dưới.
+            session._trim_tail = lambda a: a  # type: ignore[method-assign]
         return session, eng, sent
 
     return make
@@ -186,61 +191,43 @@ def test_uncertain_capped_at_max(make_session):
     assert len(uncertain) == live.UNCERTAIN_MAX
 
 
-# ── _refresh_bias (US-806/809): topic chỉ re-rank term, KHÔNG vào prompt ──
-# Bug thực địa 2026-07-20: prompt "Chủ đề: ..." bị Whisper nhại vào subtitle
-# ("chủ đề", "J. J. J.") — spec.glossary phải là danh sách term thuần.
+# ── Prompt live (US-826): CHỈ glossary user gõ tay, không bias tự động ──
+# Đo 2026-07-26: bias tự động ("hình dung, kubernetes" từ thư viện) bị decoder
+# echo lên subtitle khi im lặng/nhiễu và kéo no_speech_prob về 0. Thư viện chỉ
+# còn phục vụ upload/reanalyze.
 
 
-def test_topic_reranks_terms_but_never_enters_prompt(make_session):
+def test_prompt_is_user_glossary_verbatim(make_session):
     db.upsert_correction("cu bơ nét", "Kubernetes")
     db.upsert_correction("cu bơ nét", "Kubernetes")  # count=2 → auto-approve
-    db.upsert_correction("gờ ra pha na", "Grafana")
-    db.upsert_correction("gờ ra pha na", "Grafana")
     session, _, _ = make_session({"glossary": "Jira, OKR", "title": "họp về Grafana"})
 
-    prompt = session.spec.glossary
-    assert "Chủ đề" not in prompt  # văn xuôi tuyệt đối không vào prompt
-    assert prompt.startswith("Jira, OKR")  # user-first, term-list thuần
-    # Topic (title) đẩy term khớp lên trước term không khớp.
-    assert prompt.index("Grafana") < prompt.index("Kubernetes")
-
-
-def test_prompt_stays_empty_when_no_terms(make_session):
-    # Thư viện + glossary rỗng, có title → prompt phải RỖNG (không còn mỗi
-    # câu "Chủ đề: ..." — chính là ca gây bug nhại prompt).
-    session, _, _ = make_session({"title": "họp sprint"})
-    assert session.spec.glossary == ""
-    session._refresh_bias("topic condense ra")
-    assert session.spec.glossary == ""
-
-
-def test_refresh_bias_swaps_spec_atomically(make_session):
-    db.upsert_correction("cu bơ nét", "Kubernetes")
-    db.upsert_correction("cu bơ nét", "Kubernetes")
-    session, _, _ = make_session({"glossary": "Jira"})
-    old_spec = session.spec
-
-    session._refresh_bias("bàn về Kubernetes")
-
-    assert session.spec is not old_spec
-    assert "Chủ đề" not in session.spec.glossary
+    assert session.spec.glossary == "Jira, OKR"  # thư viện KHÔNG vào prompt live
     assert session.spec.glossary == session.glossary  # ASR và pass 2 cùng chuỗi
 
 
-def test_refresh_bias_error_keeps_old_spec(make_session, monkeypatch):
-    from app import corrections
+def test_prompt_stays_empty_when_no_user_glossary(make_session):
+    # Glossary user rỗng → prompt RỖNG kể cả khi có title + thư viện có term
+    # (chính là ca "kubernetes" bị echo khi prompt tự động còn bật).
+    db.upsert_correction("cu bơ nét", "Kubernetes")
+    db.upsert_correction("cu bơ nét", "Kubernetes")
+    session, _, _ = make_session({"title": "họp sprint"})
+    assert session.spec.glossary == ""
 
-    session, _, _ = make_session({"glossary": "Jira"})
-    old_spec, old_gloss = session.spec, session.glossary
 
-    def boom(*a, **k):
-        raise RuntimeError("db hỏng")
+def test_silence_finalizes_empty_without_decode(make_session):
+    # US-826: buffer toàn im lặng → không decode (đỡ 18-25s thang nhiệt lúc
+    # Stop), final rỗng để client xoá dòng partial, không queue gì.
+    eng = FakeEngine([engines.DecodeResult("bịa từ im lặng", min_logprob=-0.2)])
+    session, _, sent = make_session(engine=eng, real_trim=True)
+    session.utt_seq = 1
 
-    monkeypatch.setattr(corrections, "build_bias", boom)
-    session._refresh_bias("topic mới")
+    session._finalize(AUDIO)  # AUDIO = zeros → VAD không thấy speech
 
-    assert session.spec is old_spec
-    assert session.glossary == old_gloss
+    assert {"type": "final", "utt": 1, "text": ""} in sent
+    assert session.correction_q.qsize() == 0
+    assert session.revision_q.qsize() == 0
+    assert eng.results  # decode KHÔNG được gọi — kết quả fake còn nguyên
 
 
 def test_save_collapses_loop_across_utterance_boundary(make_session):

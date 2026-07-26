@@ -554,11 +554,11 @@ def test_live_session_snapshots_bias_at_start(tmp_db, monkeypatch):
     session = live.LiveSession(
         ws=None, loop=None, cfg={"glossary": "MyTerm", "store_audio": False}
     )
-    # Library chốt lúc start phiên: vào cả spec ASR lẫn pairs pass 2.
-    # ASR và pass 2 dùng CÙNG chuỗi term user-first (hotfix 2026-07-20: bỏ
-    # tiêm topic + bỏ đảo thứ tự — prompt văn xuôi bị Whisper nhại vào subtitle).
-    assert session.spec.glossary == "MyTerm, Kubernetes"
-    assert session.glossary == "MyTerm, Kubernetes"
+    # US-826 (2026-07-26): prompt live CHỈ là glossary user gõ — thư viện KHÔNG
+    # vào prompt nữa (bias tự động bị decoder echo khi im lặng, đo thực địa).
+    # Pairs pass 2 vẫn chốt từ thư viện lúc start.
+    assert session.spec.glossary == "MyTerm"
+    assert session.glossary == "MyTerm"
     assert session.pairs == (("cu bơ nét", "Kubernetes"),)
 
 

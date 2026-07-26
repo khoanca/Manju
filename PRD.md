@@ -62,15 +62,16 @@ Hệ thống theo mô hình **local-first + org sync**:
 - Mở rộng slang/teencode MXH (net-new 2026-07-20): US-815 seed slang nói tự soạn (`tag='slang'`, toggle mặc định tắt, ranking region-neutral); US-816 LLM (OpenRouter) tổng hợp slang đang hot → nhập `pending` chờ duyệt; US-817 đọc trang web public tổng hợp trend (robots.txt, không né anti-bot; app không tự scrape TikTok/FB/X — API đóng); US-818 caption MXH tươi qua Apify (opt-in `APIFY_TOKEN`, hashtag TikTok qua setting, ToS do user quyết khi chọn dùng Apify). Chi tiết: `docs/plan-slang-lexicon.md`.
 
 ### FR-7 — Live Intelligence: bias thông minh cho subtitle trực tiếp (net-new 2026-07-20)
-- US-806 — Topic-bias: topic (US-805) xếp lại lexicon + tiêm vào Whisper initial_prompt, refresh glossary giữa phiên.
-- US-807 — Personal lexicon (học): mine từ đặc trưng mỗi speaker từ transcript đã diarize (bảng `speaker_terms`).
-- US-808 — Personal lexicon (dùng): chọn người tham dự lúc mở live → nạp từ của họ vào bias.
-- US-809 — Metadata cuộc họp: title/agenda làm topic khởi tạo, bias từ câu đầu tiên.
-- US-810 — Region theo speaker: tag Bắc/Trung/Nam → ưu tiên cặp sửa đúng vùng miền.
-- US-811 — Revision: câu confidence thấp được re-decode nền bằng setting mạnh hơn, đẩy bản sửa qua WS.
-- US-812 — Uncertain words: word-confidence thấp báo pass 2 chỗ cần soát kỹ (opt-in).
-- US-813 — Denoise mic (noisereduce, opt-in) trước VAD; WAV lưu vẫn raw.
-- US-814 — Speaker-ID realtime: nhận diện người nói theo utterance final, tag tên + bias theo người đang nói.
+**PARKED một phần 2026-07-26 (FR-9/US-827):** các US đưa ngữ cảnh/bias tự động vào ĐƯỜNG LIVE bị gỡ khỏi live path — đo thực địa cho thấy bias tự động bị decoder echo lên subtitle khi im lặng/nhiễu và kéo `no_speech_prob` về 0 (vô hiệu gate chống bịa), trong khi thư viện corrections còn rỗng nên lợi ích chưa chứng minh được. Module giữ nguyên cho upload/reanalyze; khôi phục khi thư viện có dữ liệu thật (code cũ trong git history, nhánh trước commit FR-9).
+- US-806 — Topic-bias ~~(live)~~ **PARKED cho live**; re-rank lexicon vẫn dùng cho upload.
+- US-807 — Personal lexicon (học): mine từ đặc trưng mỗi speaker từ transcript đã diarize (bảng `speaker_terms`) — giữ (không đụng live path).
+- US-808 — Personal lexicon (dùng ở live) — **PARKED**.
+- US-809 — Metadata cuộc họp làm topic khởi tạo — **PARKED** (title vẫn dùng đặt tên transcript).
+- US-810 — Region theo speaker: tag Bắc/Trung/Nam → ưu tiên cặp sửa đúng vùng miền — giữ cho upload/pass-2 full-text.
+- US-811 — Revision: câu confidence thấp được re-decode nền bằng setting mạnh hơn, đẩy bản sửa qua WS (mlx mặc định tắt — xem plan-live-intelligence).
+- US-812 — Uncertain words: word-confidence thấp báo pass 2 chỗ cần soát kỹ (opt-in) — giữ.
+- US-813 — Denoise mic (noisereduce, opt-in) trước VAD; WAV lưu vẫn raw — giữ.
+- US-814 — Speaker-ID realtime — **PARKED** (tranh CPU với decode; đã opt-in OFF từ 2026-07-20).
 - Chi tiết AC/task: `docs/plan-live-intelligence.md` (plan doc thắng PRD khi lệch, tới khi write-back).
 
 ### FR-8 — Accuracy Bench: đo độ chính xác bằng bản sửa tay (net-new 2026-07-20)
@@ -83,6 +84,15 @@ Hệ thống theo mô hình **local-first + org sync**:
 - WER/CER tự cài bằng Levenshtein, không thêm dependency; chuẩn hoá gộp hoa thường + bỏ dấu câu nhưng GIỮ dấu thanh và số (sai thanh điệu là lỗi thật).
 - Ngoài phạm vi đợt này: đo ảnh hưởng của `lexicon_*` / `revise` / `live_ident` (cần dựng lại toàn pipeline live, không chỉ cửa sổ decode).
 - Chi tiết AC/task: `docs/plan-accuracy-bench.md`.
+
+### FR-9 — Live Reliability: chống lặp/bịa + Stop tức thời (net-new 2026-07-26)
+- Lý do: điều tra thực địa 2026-07-25 ("đăng đăng đăng" trên subtitle, Stop chờ 18-25s) — gốc rễ là decoder-born loops (greedy partial + thang temperature chấp nhận rác T=1.0), filter mù lặp ×3, và final decode dài giữ decode lock ngay lúc Stop. Tái hiện + kiểm chứng chéo trên WAV thật.
+- US-824 — Chống lặp: subtitle (partial + final + bản lưu) không chứa chuỗi lặp thoái hoá; lặp nhấn mạnh thật giữ nguyên. Cơ chế: gate `compression_ratio>2.4` (chỉ số whisper trả sẵn), cycle ≥3-token lặp ≥3, run ×3 khi segment logprob<−0.5 — ngưỡng kiểm 0 false-positive trên 34 phiên.
+- US-825 — Stop tức thời: bấm Stop → UI rời màn ghi <0.5s, lưu chạy nền; correction câu cuối không bị mất im lặng; audio OPFS không mồ côi ở nhánh lỗi.
+- US-826 — Live decode gọn: live-final chỉ T=(0.0, 0.2) + accept-or-drop (upload giữ thang đủ); đuôi im lặng bị trim trước decode (pad 0.3s); initial_prompt CHỈ chứa glossary user gõ.
+- US-827 — Park ngữ cảnh khỏi live path (xem FR-7).
+- US-828 — Telemetry decode: mỗi utterance lưu temperature/compression_ratio/no_speech_prob thật/wall-time vào `raw_segments` — truy phiên lỗi không cần tái hiện.
+- Chi tiết AC/task: `docs/plan-live-reliability.md`.
 
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).

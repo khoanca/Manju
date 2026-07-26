@@ -454,7 +454,14 @@ class MlxEngine(Engine):
         self.info = EngineInfo("mlx", f"{self._repo.rsplit('/', 1)[-1]} (mlx)")
 
     def _transcribe(
-        self, audio, spec: DecodeSpec, final: bool, *, word_timestamps: bool = False, repo: str | None = None
+        self,
+        audio,
+        spec: DecodeSpec,
+        final: bool,
+        *,
+        word_timestamps: bool = False,
+        repo: str | None = None,
+        temps: tuple[float, ...] | float | None = None,
     ) -> dict:
         return self._mlx.transcribe(
             audio,
@@ -463,15 +470,35 @@ class MlxEngine(Engine):
             condition_on_previous_text=False,
             initial_prompt=spec.glossary or None,
             # final: cho phép fallback nhiệt độ khi đoạn "khó"; partial: 1 lần cho nhanh.
-            temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0) if final else 0.0,
+            temperature=temps if temps is not None else ((0.0, 0.2, 0.4, 0.6, 0.8, 1.0) if final else 0.0),
             word_timestamps=word_timestamps,
             verbose=None,
         )
 
+    # Live final: KHÔNG leo thang tới T≥0.4 — đo 2026-07-26: mọi nấc cao chỉ
+    # sinh rác sampling ("y plane"×71, glossary echo) mà mlx chấp nhận vô điều
+    # kiện, và thang đủ 6 nấc giữ _decode_lock 18.5–25s ngay lúc Stop. Nấc
+    # (0.0, 0.2) + accept-or-drop: fail gate thì bỏ utterance (im lặng/rác),
+    # KHÔNG cố decode bằng được. Upload/reanalyze vẫn thang đủ (không realtime).
+    _LIVE_FINAL_TEMPS = (0.0, 0.2)
+
     def _decode(self, audio, spec, *, final):
         with_words = spec.flag_words and final
-        result = self._transcribe(audio, spec, final, word_timestamps=with_words)
-        return _mlx_scored(result["segments"], with_words=with_words)
+        result = self._transcribe(
+            audio, spec, final, word_timestamps=with_words,
+            temps=self._LIVE_FINAL_TEMPS if final else None,
+        )
+        scored = _mlx_scored(result["segments"], with_words=with_words)
+        if final and scored.text and scored.min_logprob < -1.0:
+            # accept-or-drop: lp<-1.0 là decode fail theo chính chuẩn whisper —
+            # thang cụt (0.0, 0.2) không cứu được thì thà rỗng còn hơn bịa.
+            return DecodeResult(
+                "",
+                max_compression_ratio=scored.max_compression_ratio,
+                max_no_speech_prob=scored.max_no_speech_prob,
+                temperature=scored.temperature,
+            )
+        return scored
 
     def revise(self, audio: np.ndarray, spec: DecodeSpec) -> str | None:
         # Re-decode câu live confidence thấp bằng large-v3 full (nhiều lớp decoder

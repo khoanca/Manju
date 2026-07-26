@@ -1,5 +1,11 @@
 # Plan — Live Intelligence (FR-7, US-806..814)
 
+> **PARKED một phần 2026-07-26 (FR-9/US-827, xem `docs/plan-live-reliability.md`):**
+> US-806 (live)/808/809/814 đã gỡ khỏi đường live — `ContextTracker`, refresh-bias,
+> memory_filter call-site, speaker-ID live không còn trong `app/live.py`. Module
+> (`corrections.build_bias`, `memory_filter`, `diarize`) giữ nguyên cho upload/
+> reanalyze. Khôi phục: git history trước nhánh `fix/live-decode-simplify`.
+
 > Plan doc này là nguồn chi tiết; PRD FR-7 chỉ là stub. Lệch nhau → plan doc thắng cho tới khi write-back.
 > Nền: FR-6 correction library (US-801..805). Nguyên tắc xuyên suốt: **never-fail** — mọi tính năng lỗi thì rơi về hành vi cũ; glossary user nhập không bao giờ bị cắt.
 
