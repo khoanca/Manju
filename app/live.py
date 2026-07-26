@@ -15,6 +15,7 @@ import queue
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -128,6 +129,9 @@ class LiveSession:
         self.raw_sentences: dict[int, str] = {}
         self.raw_scores: dict[int, float] = {}  # min_logprob mỗi utt (cho reanalyze)
         self.raw_meta: dict[int, dict] = {}  # telemetry decode mỗi utt (US-828)
+        # US-825: set sau khi _save xong — correction về muộn tự ghi đè DB.
+        self.saved_tid: str | None = None
+        self._saved_text = ""
         self.utt_start: dict[int, float] = {}  # mốc bắt đầu mỗi câu (giây, tính từ đầu phiên)
         # US-813: denoise opt-in — chỉ thread decode đụng _clean (không cần lock);
         # bản WAV lưu vẫn là raw (feed ghi thẳng), artifact không dính vào file.
@@ -196,9 +200,15 @@ class LiveSession:
             self.revision_q.put(None)
             self._revise_thread.join(timeout=3)
         if self.correct_enabled:
+            # US-825: chỉ chờ NGẮN — correction chưa xong sẽ tự ghi đè DB +
+            # artifact khi hoàn tất (_persist_late_correction), không mất nữa
+            # (trước đây join(8) hết giờ là câu cuối mất correction trong im lặng).
             self.correction_q.put(None)
-            self._correct_thread.join(timeout=8)
-        return self._save()
+            self._correct_thread.join(timeout=2)
+        tid = self._save()
+        # Bắt nốt correction lọt khe giữa snapshot của _save và saved_tid.
+        self._persist_late_correction()
+        return tid
 
     # ── Helpers ───────────────────────────────────────────────────────────
     def _send(self, msg: dict) -> None:
@@ -348,11 +358,17 @@ class LiveSession:
         words: list[list[object]] = []
         clipped = self._trim_tail(audio)
         started = time.monotonic()
+        spec = self.spec
+        if self.stop_event.is_set() and spec.flag_words:
+            # US-825: final lúc Stop bỏ word_timestamps — nó đội giá MỌI nấc
+            # temperature (đo 2026-07-26); gạch đỏ từ khả nghi cho câu chót
+            # không đáng bắt user chờ.
+            spec = replace(spec, flag_words=False)
         try:
             if clipped.size == 0:
                 text = ""
             else:
-                res = self.engine.decode_scored(clipped, self.spec, final=True)
+                res = self.engine.decode_scored(clipped, spec, final=True)
                 text = res.text
                 # US-812: word confidence thấp → pass 2 biết chỗ cần soát kỹ.
                 uncertain = tuple(w.strip() for w, p in res.words if p < UNCERTAIN_PROB)[:UNCERTAIN_MAX]
@@ -449,6 +465,8 @@ class LiveSession:
             self.sentences[utt] = final
             changed = final != orig
             self._send({"type": "corrected", "utt": utt, "text": final, "changed": changed})
+            # US-825: transcript đã lưu (Stop không chờ pass 2) → ghi đè bản lưu.
+            self._persist_late_correction()
 
     # ── Lưu transcript ────────────────────────────────────────────────────
     def _close_recording(self) -> bytes:
@@ -466,22 +484,45 @@ class LiveSession:
         self._rec_path.unlink(missing_ok=True)
         return data
 
-    def _save(self) -> str | None:
-        pcm = self._close_recording()
+    def _render(self) -> tuple[str, str, list[dict]]:
+        """(text, raw, segments) từ trạng thái câu hiện tại — dùng cho _save VÀ
+        correction về muộn (US-825). Gom lặp TOÀN VĂN: bộ lọc live chỉ soi từng
+        segment nên loop vắt qua ranh giới 2 utterance ("NYE NYE" | "NYE NYE" →
+        4×NYE, live-2341) lọt ngưỡng per-segment; collapse_loops trên chuỗi đã
+        nối bắt được (tất định, không đụng câu thật). Xem app/cleanup.py."""
         order = sorted(self.sentences)
-        # Gom lặp TOÀN VĂN trước khi lưu: bộ lọc live chỉ soi từng segment nên
-        # loop thoái hoá vắt qua ranh giới 2 utterance ("NYE NYE" | "NYE NYE" →
-        # 4×NYE, live-2341) lọt hết ngưỡng per-segment. collapse_loops trên chuỗi
-        # đã nối bắt được (tất định, không đụng câu thật). Xem app/cleanup.py.
         text = engines.collapse_loops(" ".join(self.sentences[k] for k in order)).strip()
-        if not text:
-            return None
         raw = " ".join(self.raw_sentences[k] for k in order).strip()
         # Từng câu kèm mốc thời gian (giây từ đầu phiên) → history xem chi tiết đoạn.
         segments = [
             {"start": round(self.utt_start.get(k, 0.0), 2), "text": self.sentences[k]}
             for k in order
         ]
+        return text, raw, segments
+
+    def _persist_late_correction(self) -> None:
+        """US-825: pass-2 xong SAU khi transcript đã lưu (Stop không chờ LLM) →
+        ghi đè bản chính + artifact; raw_segments (telemetry ASR thô) giữ
+        nguyên. Never-fail — correction muộn lỗi không được phá phiên."""
+        tid = self.saved_tid
+        if tid is None:
+            return
+        try:
+            text, raw, segments = self._render()
+            if not text or text == self._saved_text:
+                return
+            db.update_live_text(tid, text, raw if raw != text else None, segments)
+            (transcribe.TRANSCRIPTS / f"{tid}.txt").write_text(text, encoding="utf-8")
+            self._saved_text = text
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _save(self) -> str | None:
+        pcm = self._close_recording()
+        order = sorted(self.sentences)
+        text, raw, segments = self._render()
+        if not text:
+            return None
         # ASR thô mỗi utterance (text như live nghe, trước pass 2) — reanalyze dùng
         # THAY vì batch-decode lại (khác live). Kèm telemetry US-828 (nsp thật,
         # cr, temperature, wall) — trước đây nsp hardcode 0.0 nên không truy được.
@@ -502,7 +543,7 @@ class LiveSession:
                 transcribe.pcm_to_wav(pcm, wav_path, SAMPLE_RATE)
             except Exception:  # noqa: BLE001 — lỗi đóng gói audio không được chặn lưu text
                 wav_path = None
-        return transcribe.save_transcript(transcribe.TranscriptDraft(
+        tid = transcribe.save_transcript(transcribe.TranscriptDraft(
             original_name=self.title or f"live-{self.started_at:%H%M}",
             language=self.language,
             duration=self.total_samples / SAMPLE_RATE,
@@ -513,6 +554,10 @@ class LiveSession:
             audio_path=wav_path,
             raw_segments=raw_segments,
         ))
+        # US-825: từ đây correction pass-2 về muộn tự ghi đè bản lưu.
+        self._saved_text = text
+        self.saved_tid = tid
+        return tid
 
 
 # ── Resume: phiên rớt WS được giữ chờ client nối lại trước khi chốt & lưu ──

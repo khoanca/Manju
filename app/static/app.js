@@ -1437,7 +1437,7 @@ class LiveConn {
 
 // ── Feature 1: Ghi âm trực tiếp (mic → WS → subtitle + lưu audio) ───────────
 const subs = $("subtitles"), recTimer = $("recTimer"), recPill = $("recPill"), recHint = $("recHint");
-let live = null;   // {conn, ctx, stream, opfs, stopping, deadline, paused, base, resumeAt, timer}
+let live = null;   // {conn, ctx, stream, opfs, stopping, paused, base, resumeAt, timer}
 let tw = null;
 
 function enterRecord(){
@@ -1528,14 +1528,11 @@ async function startLive(meta){
       if (!live) return;
       if (state === "reconnecting"){ setPill("MẤT MẠNG — ĐANG NỐI LẠI…", false); return; }
       if (state === "resumed"){ setPill("RECORDING", true); return; }
-      if (state === "dead"){
-        if (live.stopping){ endLive(); showScreen("home"); return; }
-        cleanupLive();
-      }
+      if (state === "dead") cleanupLive();   // sau Stop: stopLive đã chuyển handler sang bgSaveStart
     }
   );
   live = { conn, ctx, stream, opfs: useOpfs ? startOpfsWriter() : null,
-           stopping:false, deadline:null, paused:false, base:0, resumeAt:Date.now(),
+           stopping:false, paused:false, base:0, resumeAt:Date.now(),
            timer:setInterval(tickTimer,300) };
   subs.innerHTML = ""; recTimer.textContent = "00:00:00";
   setPill("KẾT NỐI…", true); setWave("on");
@@ -1553,6 +1550,7 @@ async function startLive(meta){
 }
 
 function handleLiveMsg(m){
+  if (!live) return;   // phiên đã rời (Stop → handler nền) — không đụng DOM màn ghi
   if (m.type === "ready"){ setPill("RECORDING", true); return; }
   if (m.type === "error"){ setPill("LỖI", false); recHint.textContent = m.message; return; }
   if (m.type === "partial"){
@@ -1572,18 +1570,8 @@ function handleLiveMsg(m){
   } else if (m.type === "speaker"){
     const el = subs.querySelector(`[data-utt="${m.utt}"]`);
     if (el){ el.dataset.spk = m.name; setLine(el, el.dataset.raw != null ? el.dataset.raw : el.textContent); }
-  } else if (m.type === "saved"){
-    const id = m.transcript_id;
-    const opfsDone = live && live.opfs ? live.opfs.finish() : Promise.resolve(null);
-    endLive();
-    opfsDone
-      .then(file => { if (file && id) rememberOpfs(id, file); })
-      .then(loadHistory)
-      .then(() => {
-        showScreen("home");
-        if (id){ const it = ALL.find(x => x.id === id); if (it) openDetail(it); }
-      });
   }
+  // "saved" không tới đây: stopLive() đã chuyển onMsg sang bgSaveMsg (lưu nền).
 }
 function subEl(utt){ let el = subs.querySelector(`[data-utt="${utt}"]`); if (!el){ el = document.createElement("p"); el.className = "line"; el.dataset.utt = utt; subs.appendChild(el); } return el; }
 // Vẽ 1 dòng subtitle: giữ text gốc trong dataset.raw, thêm "Tên: " nếu đã biết người nói.
@@ -1614,32 +1602,24 @@ $("recPause").onclick = () => {
   else { live.resumeAt = Date.now(); live.paused = false; setPill("RECORDING", true); setWave("on"); $("recPause").textContent = "❚❚ Pause"; }
 };
 
-// stop & close both finish + save
+// stop & close: rời màn ghi NGAY, chốt & lưu chạy nền (US-825)
 $("recStop").onclick = stopLive;
 $("recClose").onclick = () => { if (live) stopLive(); else showScreen("home"); };
 function stopLive(){
   if (!live || live.stopping) return;
   live.stopping = true;
-  $("recStop").disabled = true;
-  setPill("ĐANG LƯU…", false); setWave("off"); recHint.textContent = "Đang chốt câu cuối & lưu…";
   stopAudio();
-  if (live.conn.sendJSON({ type:"stop" })){
-    // 60s (không 30): nếu shutdown server chậm hơn 30s, teardown sớm sẽ bỏ qua
-    // "saved" → rememberOpfs không chạy → audio OPFS mồ côi (không nghe lại được).
-    live.deadline = setTimeout(() => { endLive(); showScreen("home"); }, 60000);
-  } else {
-    // Đang mất kết nối: server giữ phiên và sẽ tự chốt & lưu sau ~60s.
-    if (live.opfs) live.opfs.finish();
-    endLive(); showScreen("home");
-  }
+  const { conn, opfs } = live;
+  endLive({ keepConn: true });   // WS giữ mở — bgSaveStart tiếp quản chờ "saved"
+  showScreen("home");
+  bgSaveStart(conn, opfs);
 }
 function stopAudio(){ if (!live) return; try{ live.stream.getTracks().forEach(t => t.stop()); }catch{} try{ live.ctx.close(); }catch{} }
 // Dọn mọi timer/state của phiên ghi và giải phóng `live`.
-function endLive(){
-  if (live){ clearInterval(live.timer); clearTimeout(live.deadline); try{ live.conn.close(); }catch{} }
+function endLive(opts){
+  if (live){ clearInterval(live.timer); if (!(opts && opts.keepConn)) try{ live.conn.close(); }catch{} }
   if (tw){ clearInterval(tw.timer); tw = null; }
   releaseWakeLock();
-  $("recStop").disabled = false;
   live = null;
 }
 function cleanupLive(){ // hết đường nối lại (server không giữ phiên / rớt quá lâu)
@@ -1649,6 +1629,71 @@ function cleanupLive(){ // hết đường nối lại (server không giữ phi�
   if (opfs) opfs.finish();
   setPill("MẤT KẾT NỐI", false); setWave("off");
   recHint.textContent = "Mất kết nối với server — phần đã ghi sẽ tự lưu trên server trong ~1 phút.";
+}
+
+// ── Lưu nền sau Stop (US-825) ──────────────────────────────────────────────
+// WS chạy nền chờ "saved" (shutdown server có thể chậm → deadline 60s). Mọi
+// nhánh kết thúc (saved / deadline / WS chết / resume bị từ chối) đều chốt
+// OPFS đúng 1 lần qua bgOpfsDone — audio trên máy không còn mồ côi.
+function bgSaveStart(conn, opfs){
+  const bg = { conn, opfs, opfsDone: null, saved: false, failed: false };
+  bg.deadline = setTimeout(() => bgSaveFail(bg, true), 60000);
+  conn.onMsg = (m) => bgSaveMsg(bg, m);
+  conn.onState = (s) => {
+    // Đứt ngay lúc Stop: LiveConn tự nối lại → gửi lại "stop"; hết cửa → fail.
+    if (s === "resumed"){ conn.sendJSON({ type: "stop" }); return; }
+    if (s === "dead") bgSaveFail(bg, false);
+  };
+  saveBadge("Đang lưu nền…", true, 0);
+  conn.sendJSON({ type: "stop" });   // false = WS đang đứt → nhánh resumed/dead lo
+}
+// finish() chỉ gọi được 1 lần (worker terminate sau đó) → memoize promise.
+function bgOpfsDone(bg){
+  if (!bg.opfsDone) bg.opfsDone = bg.opfs ? bg.opfs.finish() : Promise.resolve(null);
+  return bg.opfsDone;
+}
+function bgSaveMsg(bg, m){
+  if (m.type === "saved" && !bg.saved){
+    bg.saved = true;   // "saved" tới muộn sau deadline vẫn cập nhật được (WS còn mở)
+    clearTimeout(bg.deadline);
+    try{ bg.conn.close(); }catch{}
+    bgOpfsDone(bg)
+      .then(file => { if (file && m.transcript_id) rememberOpfs(m.transcript_id, file); })
+      .then(loadHistory)
+      .then(() => saveBadge("Đã lưu ✓", false, 5000));
+  } else if (m.type === "error"){
+    // Resume bị từ chối ("phiên đã kết thúc — đã tự lưu") → đóng WS để
+    // LiveConn ngừng vòng nối lại, rồi chốt OPFS.
+    try{ bg.conn.close(); }catch{}
+    bgSaveFail(bg, false);
+  }
+  // partial/final/corrected/revise/speaker sau khi rời màn ghi: bỏ qua —
+  // subtitles có thể đã thuộc phiên mới; server tự lưu các bản sửa muộn.
+}
+function bgSaveFail(bg, keepConn){   // keepConn: nhánh deadline — chờ "saved" muộn
+  if (bg.saved || bg.failed) return;
+  bg.failed = true;
+  if (!keepConn){ clearTimeout(bg.deadline); try{ bg.conn.close(); }catch{} }
+  bgOpfsDone(bg);   // chốt file PCM: audio giữ được trên máy (nghe/xuất từ Settings)
+  saveBadge(bg.opfs ? "Mất kết nối — bản ghi audio đã giữ trên máy"
+                    : "Mất kết nối — server sẽ tự lưu bản ghi trong ~1 phút", false, 8000);
+}
+// Badge trạng thái lưu nền: pill nổi giữa mép trên, không chặn thao tác.
+let saveBadgeTimer = null;
+function saveBadge(text, blink, hideMs){
+  let el = $("saveBadge");
+  if (!el){
+    el = document.createElement("div");
+    el.id = "saveBadge"; el.className = "pill";
+    el.style.cssText = "position:fixed;top:calc(14px + env(safe-area-inset-top));" +
+      "left:50%;transform:translateX(-50%);z-index:1300;box-shadow:0 6px 18px rgba(15,23,42,.18);";
+    document.body.appendChild(el);
+  }
+  clearTimeout(saveBadgeTimer);
+  el.innerHTML = `<span class="dot"></span> ${text}`;
+  el.classList.toggle("live", !!blink);
+  el.classList.remove("hidden");
+  if (hideMs) saveBadgeTimer = setTimeout(() => el.classList.add("hidden"), hideMs);
 }
 window.addEventListener("beforeunload", () => { if (live){ try{ live.conn.close(); }catch{} } });
 

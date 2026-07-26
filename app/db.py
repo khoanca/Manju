@@ -271,6 +271,25 @@ def set_edited_text(transcript_id: str, edited_text: str | None) -> bool:
     return cur.rowcount > 0
 
 
+def update_live_text(
+    transcript_id: str, text: str, raw_text: str | None, segments: list[dict] | None
+) -> bool:
+    """Correction pass-2 về MUỘN, sau khi phiên live đã lưu (US-825 — Stop
+    không chờ LLM): cập nhật bản chính + raw + segments; raw_segments (telemetry
+    ASR thô) giữ nguyên. Trả False nếu transcript không tồn tại."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE transcripts SET text = ?, raw_text = ?, segments = ? WHERE id = ?",
+            (
+                text,
+                raw_text,
+                json.dumps(segments, ensure_ascii=False) if segments else None,
+                transcript_id,
+            ),
+        )
+    return cur.rowcount > 0
+
+
 def set_golden(transcript_id: str, golden: bool) -> bool:
     """Đánh dấu bản sửa tay đủ đúng để làm chuẩn đo WER (US-819).
     Trả False nếu transcript không tồn tại."""
