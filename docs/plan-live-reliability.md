@@ -1,7 +1,7 @@
 # Plan — Live Reliability (FR-9, US-824..828)
 
 - **Source**: FR-9 (net-new 2026-07-26, thêm vào PRD cùng đợt này — pattern net-new như FR-6/7/8)
-- **Status**: Planning
+- **Status**: Implemented (chờ verify e2e T-013)
 - **Updated**: 2026-07-26
 - **Gốc rễ**: điều tra 13-agent 2026-07-25/26, tái hiện được trên WAV thật (chi tiết: hội thoại + memory `whisper-vi-hallucination`, `live-stop-latency-rootcause`). Tóm tắt bằng chứng:
   - Lặp sinh trong decoder (1 raw segment): (a) partial greedy T=0 loop trên buffer speech+im lặng; (b) final rơi thang temperature → mlx-whisper **chấp nhận vô điều kiện kết quả T=1.0** dù fail gate.
@@ -26,18 +26,18 @@ Giữ Whisper turbo + pass-2 (đã thắng mọi benchmark thay thế), sửa 3 
 
 | ID | Task | Source | Dep | Files | Status |
 |-----|------|--------|-----|-------|--------|
-| T-001 | Gate `compression_ratio > 2.4` trong `keep_segment` (mlx per-segment; fw qua getattr). Lưu ý cr là per-window: window degenerate rơi cả cụm — chấp nhận | US-824 | ‖ | app/engines.py | [ ] |
-| T-002 | Collapse cycle period≥3 repeat≥3 (`_CYCLE_MIN_REPEAT` tách theo period; đã kiểm 0 FP) | US-824 | ‖ | app/engines.py | [ ] |
-| T-003 | Collapse run period-1 ×3..5 khi segment `avg_logprob < −0.5` (bắt "đăng"×3, "em môm cài"; giữ stutter thật khi lp tốt) — luồng lp vào `_mlx_scored`/`_fw_scored` → collapse variant | US-824 | ‖ | app/engines.py | [ ] |
+| T-001 | Gate `compression_ratio > 2.4` trong `keep_segment` (mlx per-segment; fw qua getattr). Lưu ý cr là per-window: window degenerate rơi cả cụm — chấp nhận | US-824 | ‖ | app/engines.py | [x] |
+| T-002 | Collapse cycle period≥3 repeat≥3 (`_CYCLE_MIN_REPEAT` tách theo period; đã kiểm 0 FP) | US-824 | ‖ | app/engines.py | [x] |
+| T-003 | Collapse run period-1 ×3..5 khi segment `avg_logprob < −0.5` (bắt "đăng"×3, "em môm cài"; giữ stutter thật khi lp tốt) — luồng lp vào `_mlx_scored`/`_fw_scored` → collapse variant | US-824 | ‖ | app/engines.py | [x] |
 | T-004 | ~~Nới `_is_token_loop` luật áp đảo ≥90%~~ **REVISED khi implement**: luật áp đảo drop cả segment "để ×10 + bán" (phải collapse giữ "bán" — test có sẵn bắt được); case "Hải, "×74+"H" thực địa có cr=25.95 → gate T-001 đã bắt. `_is_token_loop` giữ nguyên | US-824 | ‖ | app/engines.py | [x] qua T-001 |
-| T-005 | Fixture regression từ history-sweep: mọi chuỗi lặp đã lọt (verbatim) phải bị cắt; mọi stutter thật phải sống | US-824 | → T-001..004 (contract chữ ký chốt trước, viết song song được) | tests/test_engines_loops.py | [ ] |
-| T-006 | Live-final: `temperature=(0.0, 0.2)` + accept-or-drop (fail gate cr/lp → utterance rỗng, KHÔNG leo T≥0.4); upload/reanalyze giữ thang đủ | US-826 | → T-001 | app/engines.py | [ ] |
-| T-007 | Trim đuôi im lặng trước final decode: chỉ decode tới `spans[-1].end` + pad 0.3s (VAD spans đã có sẵn trong `_tick_open`) | US-826 | ‖ với T-006 | app/live.py | [ ] |
-| T-008 | Bias: bỏ nạp lexicon nền vào initial_prompt khi user không nhập glossary (`build_bias('')` → chuỗi rỗng → `initial_prompt=None`) | US-826 | ‖ | app/live.py, app/corrections.py | [ ] |
-| T-009 | Gỡ call-site ContextTracker/condense/refresh-bias/memory_filter khỏi live path (module + test module giữ); spec-sync PRD FR-7 + plan-live-intelligence đánh dấu US-806/808/809/814 parked CÙNG commit | US-827 | → T-008 | app/live.py, PRD.md, docs/plan-live-intelligence.md | [ ] |
-| T-010 | Stop server: stop-final chỉ T=0 + bỏ word_timestamps; pass-2 câu cuối không kịp → lưu trước, thread nền apply correction vào DB sau `saved` (hết silent-drop); warm-up ping hủy được theo `stop_event` | US-825 | → T-006 | app/live.py, app/db.py | [ ] |
-| T-011 | Stop client: rời màn ghi ngay khi bấm (giữ WS nền chờ `saved` cập nhật lịch sử); fix 2 nhánh lỗi quên `opfs.finish()` (deadline 60s + WS-chết-sau-stop, app.js:1531,1629) | US-825 | ‖ | app/static/app.js | [ ] |
-| T-012 | Telemetry: `raw_segments[k]` thêm `temperature`, `compression_ratio`, `no_speech_prob` thật, `decode_wall_s` (DecodeResult mở rộng) | US-828 | → T-001 | app/engines.py, app/live.py | [ ] |
+| T-005 | Fixture regression từ history-sweep: mọi chuỗi lặp đã lọt (verbatim) phải bị cắt; mọi stutter thật phải sống | US-824 | → T-001..004 (contract chữ ký chốt trước, viết song song được) | tests/test_engines_loops.py | [x] |
+| T-006 | Live-final: `temperature=(0.0, 0.2)` + accept-or-drop (fail gate cr/lp → utterance rỗng, KHÔNG leo T≥0.4); upload/reanalyze giữ thang đủ | US-826 | → T-001 | app/engines.py | [x] |
+| T-007 | Trim đuôi im lặng trước final decode: chỉ decode tới `spans[-1].end` + pad 0.3s (VAD spans đã có sẵn trong `_tick_open`) | US-826 | ‖ với T-006 | app/live.py | [x] |
+| T-008 | Bias: bỏ nạp lexicon nền vào initial_prompt khi user không nhập glossary (`build_bias('')` → chuỗi rỗng → `initial_prompt=None`) | US-826 | ‖ | app/live.py, app/corrections.py | [x] |
+| T-009 | Gỡ call-site ContextTracker/condense/refresh-bias/memory_filter khỏi live path (module + test module giữ); spec-sync PRD FR-7 + plan-live-intelligence đánh dấu US-806/808/809/814 parked CÙNG commit | US-827 | → T-008 | app/live.py, PRD.md, docs/plan-live-intelligence.md | [x] |
+| T-010 | Stop server: stop-final chỉ T=0 + bỏ word_timestamps; pass-2 câu cuối không kịp → lưu trước, thread nền apply correction vào DB sau `saved` (hết silent-drop); warm-up ping hủy được theo `stop_event` | US-825 | → T-006 | app/live.py, app/db.py | [x] |
+| T-011 | Stop client: rời màn ghi ngay khi bấm (giữ WS nền chờ `saved` cập nhật lịch sử); fix 2 nhánh lỗi quên `opfs.finish()` (deadline 60s + WS-chết-sau-stop, app.js:1531,1629) | US-825 | ‖ | app/static/app.js | [x] |
+| T-012 | Telemetry: `raw_segments[k]` thêm `temperature`, `compression_ratio`, `no_speech_prob` thật, `decode_wall_s` (DecodeResult mở rộng) | US-828 | → T-001 | app/engines.py, app/live.py | [x] |
 | T-013 | Verify e2e: chạy simulator (live_sim) trên `20260725-152501-live-1523.wav` + `20260721-165404-live-1653.wav` trước/sau — tiêu chí: 0 chuỗi lặp được lưu, stop-final wall <5s, câu sạch không đổi | US-824/825/826 | → tất cả | scripts hoặc tests (đánh dấu slow) | [ ] |
 
 ## Stacked PRs (ước tính tổng ~570 dòng > 400 → bắt buộc tách)
