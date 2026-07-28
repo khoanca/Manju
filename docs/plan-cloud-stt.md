@@ -1,7 +1,7 @@
 # Plan: FR-10 — Tier `cloud`: streaming STT online-first (Soniox)
 
 - **Source**: PRD FR-10 (Đợt 1.5) + docs/research-online-stt-stack.md
-- **Status**: In-Progress
+- **Status**: Implemented
 - **Updated**: 2026-07-29
 - **Lưu ý**: chưa có SONIOX_API_KEY — build + test bằng mock transport; smoke thật & benchmark chốt provider chạy khi user điền key. Provider đổi được sau bench (module cloud_stt cô lập phần Soniox-specific).
 
@@ -13,16 +13,16 @@ Nhánh cloud là một "bộ não decode" thay thế bên trong `LiveSession` hi
 
 | ID | Task | Source | Dep | Files | Status |
 |-----|------|--------|-----|-------|--------|
-| T-001 | Contract: `mode` trong WS start; GET `/api/settings` thêm `cloud:{available,provider,relisten,cleanup}`; PUT settings thêm `cloud_cleanup`(def 0)/`cloud_relisten`(def 1); dep `websocket-client` | FR-10 (UX per-phiên) | ‖ | pyproject.toml, app/main.py | [ ] |
-| T-002 | `app/cloud_stt.py`: `available()`, `SonioxLive` (config→binary PCM→token rx, utterance grouping, speaker, callbacks on_partial/on_final/on_error, transport injectable), `build_context()` (glossary+corrections→context.terms, cap 10k chars) | FR-10 (kiến trúc) | → T-001 | app/cloud_stt.py | [ ] |
-| T-003 | Async client: `transcribe_file_async()` upload→poll→text + `delete_remote()` (xóa file + transcription sau khi nhận) — model stt-async-v5, httpx client injectable | FR-10 (re-listen + privacy xóa) | ‖ với T-002 | app/cloud_stt.py | [ ] |
-| T-004 | live.py: mode online — start CloudWorker thay decode loop; map token→utt (`partial`/`final` giữ nguyên msg); raw=final tokens là nguồn chân lý; pass 2 chỉ khi `cloud_cleanup`; fallback provider-fail → trim buffer theo end_ms → start local loop; telemetry nguồn engine vào raw_segments | FR-10 | → T-002 | app/live.py | [ ] |
-| T-005 | Re-listen sau Stop: phiên online + có WAV server + `cloud_relisten` → thread nền async-v5 → `db.update_live_text` (text=bản async, raw giữ bản live) → xóa remote; never-fail | FR-10 (nhánh cloud) | → T-003, T-004 | app/live.py, app/transcribe.py | [ ] |
-| T-006 | Upload online: form upload thêm lựa chọn online (khi available) → `_process` nhánh cloud qua async API (bỏ qua denoise/diarize local — Soniox tự diarize), fallback local khi lỗi | FR-10 ("upload chọn tương tự") | → T-003 | app/transcribe.py, app/main.py | [ ] |
-| T-007 | UI: start card radio Online/Offline (chỉ hiện khi available, nhớ lần trước, hint trả phí + audio stream ra ngoài), gửi `mode` trong start; badge engine khi ghi; settings card: toggle "AI làm sạch (cloud)" + "Nghe lại sau Stop"; upload: select engine | FR-10 (UX 2026-07-29) | → T-001 (contract) ‖ T-004 | app/static/index.html, app/static/app.js | [ ] |
-| T-008 | Tests: cloud_stt (utt grouping, context cap, fake WS transport, async poll+delete, error paths), live online e2e (fake transport → partial/final/save, fallback mid-session, cloud_cleanup on/off), settings API, upload online | testing.md | → T-004..T-007 | tests/test_cloud_stt.py, tests/test_live_cloud.py | [ ] |
-| T-009 | Bench legs realtime: `soniox-rt` (WS), cập nhật model async→stt-async-v5, thêm `assemblyai`/`deepgram` legs — chạy khi có key | FR-10 (gate benchmark) | ‖ | scripts/bench_cloud_stt.py | [ ] |
-| T-010 | Docs write-back: plan ledger, project-state, PRD nếu lệch | guardrails spec-precedence | → hết | docs/* | [ ] |
+| T-001 | Contract: `mode` trong WS start; GET `/api/settings` thêm `cloud:{available,provider,relisten,cleanup}`; PUT settings thêm `cloud_cleanup`(def 0)/`cloud_relisten`(def 1); dep `websocket-client` | FR-10 (UX per-phiên) | ‖ | pyproject.toml, app/main.py | [x] |
+| T-002 | `app/cloud_stt.py`: `available()`, `SonioxLive` (config→binary PCM→token rx, utterance grouping, speaker, callbacks on_partial/on_final/on_error, transport injectable), `build_context()` (glossary+corrections→context.terms, cap 10k chars) | FR-10 (kiến trúc) | → T-001 | app/cloud_stt.py | [x] |
+| T-003 | Async client: `transcribe_file_async()` upload→poll→text + `delete_remote()` (xóa file + transcription sau khi nhận) — model stt-async-v5, httpx client injectable | FR-10 (re-listen + privacy xóa) | ‖ với T-002 | app/cloud_stt.py | [x] |
+| T-004 | live.py: mode online — start CloudWorker thay decode loop; map token→utt (`partial`/`final` giữ nguyên msg); raw=final tokens là nguồn chân lý; pass 2 chỉ khi `cloud_cleanup`; fallback provider-fail → trim buffer theo end_ms → start local loop; telemetry nguồn engine vào raw_segments | FR-10 | → T-002 | app/live.py | [x] |
+| T-005 | Re-listen sau Stop: phiên online + có WAV server + `cloud_relisten` → thread nền async-v5 → `db.update_live_text` (text=bản async, raw giữ bản live) → xóa remote; never-fail | FR-10 (nhánh cloud) | → T-003, T-004 | app/live.py, app/transcribe.py | [x] |
+| T-006 | Upload online: form upload thêm lựa chọn online (khi available) → `_process` nhánh cloud qua async API (bỏ qua denoise/diarize local — Soniox tự diarize), fallback local khi lỗi | FR-10 ("upload chọn tương tự") | → T-003 | app/transcribe.py, app/main.py | [x] |
+| T-007 | UI: start card radio Online/Offline (chỉ hiện khi available, nhớ lần trước, hint trả phí + audio stream ra ngoài), gửi `mode` trong start; badge engine khi ghi; settings card: toggle "AI làm sạch (cloud)" + "Nghe lại sau Stop"; upload: select engine | FR-10 (UX 2026-07-29) | → T-001 (contract) ‖ T-004 | app/static/index.html, app/static/app.js | [x] |
+| T-008 | Tests: cloud_stt (utt grouping, context cap, fake WS transport, async poll+delete, error paths), live online e2e (fake transport → partial/final/save, fallback mid-session, cloud_cleanup on/off), settings API, upload online | testing.md | → T-004..T-007 | tests/test_cloud_stt.py, tests/test_live_cloud.py | [x] |
+| T-009 | Bench legs realtime: `soniox-rt` (WS), cập nhật model async→stt-async-v5, thêm `assemblyai`/`deepgram` legs — chạy khi có key | FR-10 (gate benchmark) | ‖ | scripts/bench_cloud_stt.py | [x] |
+| T-010 | Docs write-back: plan ledger, project-state, PRD nếu lệch | guardrails spec-precedence | → hết | docs/* | [x] |
 
 ## Edge Cases & Error Handling
 
