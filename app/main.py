@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app import (
     cleanup,
+    cloud_stt,
     correct,
     corrections,
     db,
@@ -69,6 +70,7 @@ class TranscribeForm(BaseModel):
     model: str = transcribe.DEFAULT_MODEL
     prompt: str = ""
     correct: bool = True
+    engine: str = "local"  # FR-10: "cloud" = nhận dạng online (khi có key)
 
 
 @app.post("/api/transcribe")
@@ -86,6 +88,7 @@ async def api_transcribe(form: Annotated[TranscribeForm, Form()]):
         model_name=form.model,
         prompt=form.prompt.strip(),
         correct=form.correct,
+        engine="cloud" if form.engine == "cloud" and cloud_stt.available() else "local",
     )
     return {"job_id": transcribe.start_transcription(data, spec)}
 
@@ -126,6 +129,10 @@ class SettingsIn(BaseModel):
     denoise_upload_enabled: bool | None = None
     # Lớp B: tự đoán ngành + nạp lexicon ngành khi transcribe (mặc định bật)
     domain_auto: bool | None = None
+    # FR-10: nhánh cloud — pass 2 trên transcript cloud (mặc định TẮT, chỉ bật
+    # khi bench chứng minh) + nghe lại async sau Stop (mặc định bật)
+    cloud_cleanup: bool | None = None
+    cloud_relisten: bool | None = None
 
 
 # Field SettingsIn / key settings → vùng seed lexicon (app/data/lexicon/{region}.json)
@@ -147,6 +154,17 @@ def _denoise_settings() -> dict:
         "highpass": int(db.get_setting("denoise_highpass", "0") or "0"),
         "hum": db.get_setting("denoise_hum", "off"),
         "upload_enabled": db.get_setting("denoise_upload_enabled", "0") == "1",
+    }
+
+
+def _cloud_settings() -> dict:
+    """Trạng thái tier cloud (FR-10) cho UI — available=False thì start card ẩn
+    option Online, mọi thứ khác giữ nguyên hành vi offline."""
+    return {
+        "available": cloud_stt.available(),
+        "provider": "soniox",
+        "cleanup": db.get_setting("cloud_cleanup", "0") == "1",
+        "relisten": db.get_setting("cloud_relisten", "1") == "1",
     }
 
 
@@ -182,6 +200,7 @@ def api_settings():
         "denoise": _denoise_settings(),
         "domain_auto": db.get_setting("domain_auto", "1") == "1",
         "domains": list(corrections.DOMAINS),
+        "cloud": _cloud_settings(),
     }
 
 
@@ -232,6 +251,10 @@ def api_settings_put(body: SettingsIn):
         db.set_setting("denoise_upload_enabled", "1" if body.denoise_upload_enabled else "0")
     if body.domain_auto is not None:
         db.set_setting("domain_auto", "1" if body.domain_auto else "0")
+    if body.cloud_cleanup is not None:
+        db.set_setting("cloud_cleanup", "1" if body.cloud_cleanup else "0")
+    if body.cloud_relisten is not None:
+        db.set_setting("cloud_relisten", "1" if body.cloud_relisten else "0")
     return {
         "audio_dir": str(db.get_audio_dir()),
         "diarize_enabled": transcribe.diarize_enabled(),
@@ -242,6 +265,7 @@ def api_settings_put(body: SettingsIn):
         "denoise_enabled": db.get_setting("denoise_enabled", "0") == "1",
         "denoise": _denoise_settings(),
         "domain_auto": db.get_setting("domain_auto", "1") == "1",
+        "cloud": _cloud_settings(),
     }
 
 
