@@ -13,6 +13,7 @@ dependencies = [
     "mcp>=1.2.0",
     "sherpa-onnx>=1.13.4",
     "noisereduce>=3.0.3",
+    "websocket-client>=1.9.0",
 ]
 
 [tool.uv]
