@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app import corrections, db, denoise, diarize, domain, engines, memory_filter
+from app import cloud_stt, corrections, db, denoise, diarize, domain, engines, memory_filter
 from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
@@ -37,6 +37,7 @@ class JobSpec:
     model_name: str = DEFAULT_MODEL
     prompt: str = ""
     correct: bool = True
+    engine: str = "local"  # FR-10: "cloud" = Soniox async (fallback local khi lỗi)
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,51 @@ def _run(job_id: str, audio_path: Path, spec: JobSpec) -> None:
             pass
 
 
+def _wav_duration(path: Path) -> float:
+    """Duration (giây) nếu là WAV đọc được — format khác trả 0.0 (chỉ hiển thị)."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _process_cloud(job_id: str, audio_path: Path, spec: JobSpec) -> None:
+    """FR-10 upload online: Soniox async là nguồn chân lý; pass 2 chỉ khi
+    cloud_cleanup bật. Không denoise/diarize local (Soniox tự diarize).
+    Raise CloudError → caller fallback pipeline local."""
+    _update(job_id, status="running", progress=0.1)
+    glossary = corrections.build_bias(spec.prompt)
+    context = cloud_stt.build_context(glossary, corrections.top_pairs(200))
+    text = cloud_stt.transcribe_file_async(
+        audio_path, cloud_stt.AsyncJobSpec(language=spec.language, context=context)
+    )
+    if not text:
+        raise cloud_stt.CloudError("transcript async rỗng")
+    _update(job_id, text=text, progress=0.8)
+    cleanup_on = spec.correct and db.get_setting("cloud_cleanup", "0") == "1"
+    full_text = text
+    if cleanup_on:
+        full_text, _ = _maybe_correct(job_id, text, spec, ())
+    transcript_id = save_transcript(TranscriptDraft(
+        original_name=spec.filename,
+        language=spec.language,
+        duration=_wav_duration(audio_path),
+        text=full_text,
+        model_name=cloud_stt.ASYNC_MODEL,
+        raw_text=text if full_text != text else None,
+        audio_path=audio_path,
+    ))
+    _update(job_id, status="done", text=full_text, progress=1.0, transcript_id=transcript_id)
+
+
 def _process(job_id: str, audio_path: Path, spec: JobSpec) -> None:
+    if spec.engine == "cloud" and cloud_stt.available():
+        try:
+            _process_cloud(job_id, audio_path, spec)
+            return
+        except cloud_stt.CloudError:
+            pass  # never-fail: cloud lỗi → chạy pipeline local như thường
     _update(job_id, status="running")
     engine = engines.get_engine()
     # Tier GPU (mlx/cuda) dùng model mặc định của engine; tier CPU tôn

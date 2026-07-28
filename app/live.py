@@ -23,7 +23,7 @@ import numpy as np
 from fastapi import WebSocket
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from app import corrections, db, denoise, engines, transcribe
+from app import cloud_stt, corrections, db, denoise, engines, transcribe
 from app.correct import LlmOpts, correct_sentence, openrouter_enabled
 
 SAMPLE_RATE = 16000
@@ -89,7 +89,18 @@ class LiveSession:
         # no_speech_prob xuống 0 làm gate chống bịa mù. Xem plan-live-reliability.
         self.glossary = self.user_glossary
         self.pairs = tuple(corrections.top_pairs(10))
-        self.correct_enabled = bool(cfg.get("correct", True))
+        # FR-10: mode online = stream PCM lên cloud STT, local loop thành fallback.
+        # Pass 2 trên transcript cloud mặc định TẮT (chỉ khi setting cloud_cleanup).
+        self._correct_requested = bool(cfg.get("correct", True))
+        self.mode = (
+            "online" if cfg.get("mode") == "online" and cloud_stt.available() else "offline"
+        )
+        self._started_online = False
+        self.cloud: cloud_stt.SonioxLive | None = None
+        self._cloud_open = False  # utterance cloud đang mở (đã cấp utt_seq)
+        self.correct_enabled = self._correct_requested and (
+            self.mode == "offline" or _setting_on("cloud_cleanup")
+        )
         # Client mỏng (PWA) tự giữ audio trong OPFS trên thiết bị → server
         # không ghi WAV (PRD FR-4).
         self.store_audio = bool(cfg.get("store_audio", True))
@@ -159,17 +170,33 @@ class LiveSession:
         self.correction_q: queue.Queue = queue.Queue()
         self.revision_q: queue.Queue = queue.Queue()  # US-811
         self.started_at = datetime.now(UTC).astimezone()
+        # FR-10: start() và _cloud_error (rx thread) có thể đua nhau start cùng
+        # worker khi provider chết ngay đầu phiên — mỗi thread chỉ start 1 lần.
+        self._thread_lock = threading.Lock()
+        self._started_workers: set[str] = set()
         self._decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
         self._correct_thread = threading.Thread(target=self._correct_loop, daemon=True)
         self._revise_thread = threading.Thread(target=self._revise_loop, daemon=True)
 
     # ── Gọi từ event loop (WS handler) ────────────────────────────────────
     def start(self) -> None:
-        self._decode_thread.start()
+        """Chạy trong thread (handler dùng to_thread — connect cloud là network
+        I/O). Cloud mở không được → tự rơi về offline TRƯỚC khi trả msg session."""
+        if self.mode == "online":
+            self._start_cloud()  # thất bại → self.mode = "offline"
+        if self.mode == "offline":
+            self._start_once("decode", self._decode_thread)
         if self.correct_enabled:
-            self._correct_thread.start()
-        if REVISE_ENABLED and self.engine.supports_revise:
-            self._revise_thread.start()
+            self._start_once("correct", self._correct_thread)
+        if REVISE_ENABLED and self.engine.supports_revise and self.mode == "offline":
+            self._start_once("revise", self._revise_thread)
+
+    def _start_once(self, name: str, thread: threading.Thread) -> None:
+        with self._thread_lock:
+            if name in self._started_workers:
+                return
+            self._started_workers.add(name)
+        thread.start()
 
     def feed(self, data: bytes) -> None:
         with self.buf_lock:
@@ -179,6 +206,9 @@ class LiveSession:
                 self._rec_file.write(data)  # bản ghi đầy đủ, không bị drop_prefix cắt
         self.total_samples += len(data) // 2
         self.last_rx = time.monotonic()
+        cloud = self.cloud
+        if cloud is not None and self.mode == "online":
+            cloud.feed(data)
 
     def rebind(self, ws: WebSocket, loop: asyncio.AbstractEventLoop) -> None:
         """Gắn WebSocket mới vào phiên đang chờ resume (client nối lại)."""
@@ -194,7 +224,13 @@ class LiveSession:
         cuối + pass-2 (ảnh hưởng text lưu) chờ vừa phải; revise/ident/condense là
         cải thiện nền → cắt ngắn, chưa xong thì bỏ, không chặn lưu."""
         self.stop_event.set()
-        self._decode_thread.join(timeout=15)
+        if self.cloud is not None:
+            # Flush token cuối (server chốt khi nhận frame rỗng) — utterance dở
+            # về qua on_final trước khi stop() trả.
+            self.cloud.stop(timeout=6.0)
+            self.cloud = None
+        if self._decode_thread.is_alive():
+            self._decode_thread.join(timeout=15)
         if self._revise_thread.is_alive():
             # Drain revision TRƯỚC pass 2 — câu revise xong còn kịp vào correction_q.
             self.revision_q.put(None)
@@ -208,6 +244,7 @@ class LiveSession:
         tid = self._save()
         # Bắt nốt correction lọt khe giữa snapshot của _save và saved_tid.
         self._persist_late_correction()
+        self._spawn_relisten(tid)
         return tid
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -417,6 +454,130 @@ class LiveSession:
         ):
             self.correction_q.put((utt, text, uncertain))
 
+    # ── Nhánh cloud (FR-10): token Soniox → protocol partial/final sẵn có ──
+    def _start_cloud(self) -> None:
+        try:
+            context = cloud_stt.build_context(self.glossary, corrections.top_pairs(200))
+        except Exception:  # noqa: BLE001 — context hỏng thì stream không context
+            context = None
+        spec = cloud_stt.LiveCloudSpec(
+            language=self.language,
+            context=context,
+            on_partial=self._cloud_partial,
+            on_final=self._cloud_final,
+            on_error=self._cloud_error,
+        )
+        worker = cloud_stt.SonioxLive(spec)
+        # Gán TRƯỚC khi start: token/error đầu tiên có thể về ngay trong start()
+        # — callback cần thấy self.cloud để trim buffer đúng mốc.
+        self.cloud = worker
+        self._started_online = True
+        try:
+            worker.start()
+        except cloud_stt.CloudError:
+            self.cloud = None
+            self._started_online = False
+            self.mode = "offline"  # thiếu key/mạng ngay từ đầu → offline trọn phiên
+            return
+        if self.mode != "online":
+            return  # provider chết ngay trong start — _cloud_error đã fallback
+        self.model_name = cloud_stt.RT_MODEL
+        self._send({"type": "ready"})
+
+    def _cloud_partial(self, text: str, start_ms: int) -> None:
+        if self.mode != "online":
+            return
+        if not self._cloud_open:
+            self._cloud_open = True
+            self.utt_seq += 1
+            self.utt_start[self.utt_seq] = start_ms / 1000.0
+        self._send({"type": "partial", "utt": self.utt_seq, "text": text})
+
+    def _cloud_final(self, text: str, start_ms: int, speaker: str | None) -> None:
+        # Chạy cả sau stop_event (flush lúc Stop) — chỉ chặn khi đã fallback.
+        if self.mode != "online":
+            return
+        if not self._cloud_open:
+            self.utt_seq += 1
+            self.utt_start[self.utt_seq] = start_ms / 1000.0
+        self._cloud_open = False
+        utt = self.utt_seq
+        # Nguồn chân lý nhánh cloud là token final (FR-10) — raw = text.
+        self.sentences[utt] = text
+        self.raw_sentences[utt] = text
+        self.raw_scores[utt] = 0.0
+        meta: dict = {"engine": cloud_stt.RT_MODEL}
+        if speaker:
+            meta["speaker"] = speaker
+        self.raw_meta[utt] = meta
+        self._send({"type": "final", "utt": utt, "text": text})
+        self._queue_correction(utt, text, ())
+        # Buffer chỉ để fallback — trim phần cloud đã chốt kẻo phình vô hạn
+        # (~115MB/giờ PCM). rx thread là dropper duy nhất khi decode loop chưa chạy.
+        worker = self.cloud
+        if worker is not None:
+            target = worker.last_final_end_ms * (SAMPLE_RATE // 1000)
+            with self.buf_lock:
+                buffered = len(self.buffer) // 2
+            self._drop_prefix(max(0, min(target - self.consumed_samples, buffered)))
+
+    def _cloud_error(self, message: str) -> None:
+        """Provider chết giữa phiên → trim buffer tới token final cuối rồi bật
+        local loop — phiên KHÔNG đứt (never-fail, FR-10). Chạy trên rx thread."""
+        if self.mode != "online" or self.stop_event.is_set():
+            return
+        self.mode = "offline"
+        self._cloud_open = False
+        worker, self.cloud = self.cloud, None
+        if worker is not None:
+            worker.abort()
+            # Bỏ phần audio đã được cloud chốt — local chỉ decode từ đó trở đi.
+            target = worker.last_final_end_ms * (SAMPLE_RATE // 1000)
+            with self.buf_lock:
+                buffered = len(self.buffer) // 2
+            self._drop_prefix(max(0, min(target - self.consumed_samples, buffered)))
+        if self._correct_requested and not self.correct_enabled:
+            self.correct_enabled = True  # nhánh local pass 2 chạy như thường lệ
+            self._start_once("correct", self._correct_thread)
+        if REVISE_ENABLED and self.engine.supports_revise:
+            self._start_once("revise", self._revise_thread)
+        self._send({
+            "type": "mode", "mode": "offline",
+            "message": f"Mất kết nối dịch vụ online ({message}) — chuyển sang nhận dạng trên máy.",
+        })
+        self._start_once("decode", self._decode_thread)
+
+    def _spawn_relisten(self, tid: str | None) -> None:
+        """FR-10: phiên online + có WAV server + cloud_relisten (default bật) →
+        stt-async-v5 nghe lại toàn bộ audio nền, bản async thành bản chính
+        (raw giữ bản live). Fallback giữa chừng vẫn đáng nghe lại (WAV trọn phiên)."""
+        if tid is None or not self._started_online or not cloud_stt.available():
+            return
+        try:
+            if db.get_setting("cloud_relisten", "1") != "1":
+                return
+        except Exception:  # noqa: BLE001
+            return
+        threading.Thread(target=self._relisten, args=(tid,), daemon=True).start()
+
+    def _relisten(self, tid: str) -> None:
+        try:
+            path = db.transcript_audio_path(tid)
+            if path is None or not path.exists():
+                return  # client mỏng giữ audio trong OPFS — không có gì để nghe lại
+            context = cloud_stt.build_context(self.glossary, corrections.top_pairs(200))
+            text = cloud_stt.transcribe_file_async(
+                path, cloud_stt.AsyncJobSpec(language=self.language, context=context)
+            )
+            if not text or text == self._saved_text:
+                return
+            live_text, _raw, segments = self._render()
+            db.update_live_text(tid, text, live_text or None, segments)
+            (transcribe.TRANSCRIPTS / f"{tid}.txt").write_text(text, encoding="utf-8")
+            self._saved_text = text
+        except Exception:  # noqa: BLE001 — re-listen lỗi thì giữ bản live
+            pass
+
     # ── Thread revise: re-decode câu confidence thấp bằng setting mạnh hơn ─
     def _revise_loop(self) -> None:
         while True:
@@ -610,8 +771,12 @@ async def _start_session(ws: WebSocket, cfg: dict) -> LiveSession | None:
         await _reject(ws, "Server đang bận — đủ số phiên live.")
         return None
     session = LiveSession(ws, asyncio.get_running_loop(), cfg)
-    session.start()
-    await ws.send_text(json.dumps({"type": "session", "token": session.token}))
+    # to_thread: mode online connect cloud (network I/O) — không được chặn loop;
+    # mode trong msg session là mode THẬT sau khi thử (xin online fail → offline).
+    await asyncio.to_thread(session.start)
+    await ws.send_text(
+        json.dumps({"type": "session", "token": session.token, "mode": session.mode})
+    )
     return session
 
 

@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""So khớp mlx-whisper (local) với STT cloud giỏi code-switch trên cùng bản ghi.
+"""Benchmark chốt provider cloud STT cho FR-10 (docs/plan-cloud-stt.md).
 
-Trả lời câu hỏi B (benchmark Gladia/Soniox) + C (so code-switch Việt–Anh) mà
-KHÔNG tích hợp cloud vào luồng production: đây là công cụ đo chạy tay, đọc key
-từ .env, dùng lại `app.accuracy` (WER/CER) và bản ghi có sẵn trong SQLite.
+So mlx-whisper (baseline production local) với các cloud STT giỏi code-switch
+Việt–Anh trên cùng bản ghi để CHỐT provider cho tier cloud. Công cụ đo chạy
+tay: đọc key từ .env, dùng lại `app.accuracy` (WER/CER) và bản ghi trong SQLite.
 
-Cloud STT (Gladia solaria-1, Soniox stt-async-preview) giỏi tiếng Việt xen Anh
-hơn Whisper NHƯNG là API cloud — đối nghịch local-first. Script này chỉ để đo
-xem đánh đổi có đáng không, không phải bước tích hợp.
+Engines cloud:
+  soniox-rt  : ĐƯỜNG LIVE THẬT — chạy đúng class production
+               `app.cloud_stt.SonioxLive` (WS stt-rt-v5), feed PCM16 mono 16k
+               từng chunk 3200B như live.py. Số này mới là số của đường live.
+  soniox     : async production — `app.cloud_stt.transcribe_file_async`
+               (stt-async-v5, tự xóa file/transcription phía Soniox khi xong).
+  gladia     : BATCH pre-recorded solaria-1 (code_switching vi+en).
+  deepgram   : BATCH pre-recorded nova-3 — cận trên chất lượng, KHÔNG streaming.
+  assemblyai : BATCH async universal-3-5-pro/universal-2 (language_code=vi) —
+               cũng là cận trên chất lượng, KHÔNG streaming.
+
+Key cần trong .env (leg thiếu key báo lỗi riêng, không chặn leg khác):
+  SONIOX_API_KEY, DEEPGRAM_API_KEY, ASSEMBLYAI_API_KEY, GLADIA_API_KEY
 
 Bản chuẩn (ref) để tính WER:
   --ref golden : edited_text của bản đã bật cờ golden (đáng tin nhất)
@@ -20,15 +30,17 @@ Baseline mlx mặc định lấy `raw_text` đã lưu (output mlx-whisper thô);
 để decode lại audio gốc (chậm, chiếm _decode_lock — chạy khi không họp).
 
 Chạy:
-  uv run python scripts/bench_cloud_stt.py --id 42 --engines mlx,gladia,soniox
-  uv run python scripts/bench_cloud_stt.py --id 42 --engines mlx,gladia --ref final
+  uv run python scripts/bench_cloud_stt.py --id 42 \
+      --engines mlx,soniox-rt,soniox,deepgram,assemblyai,gladia --ref golden
 """
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 import time
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os  # noqa: E402
 
-from app import accuracy, db  # noqa: E402
+from app import accuracy, cloud_stt, db  # noqa: E402
 
 # Qwen3-ASR (open-weights, Apache 2.0) chạy local qua MLX trên Apple Silicon —
 # đối trọng open-source với cloud, không rời local-first. Cài: uv sync --group bench.
@@ -52,9 +64,10 @@ WHISPER_MODELS = {
 }
 
 GLADIA_BASE = "https://api.gladia.io/v2"
-SONIOX_BASE = "https://api.soniox.com/v1"
-SONIOX_MODEL = "stt-async-preview"
+DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
+AAI_BASE = "https://api.assemblyai.com/v2"
 LANGS = ("vi", "en")  # code-switch Việt–Anh
+RT_CHUNK_BYTES = 3200  # 100ms PCM16 mono 16k — cỡ chunk client live gửi
 POLL_INTERVAL_S = 2.0
 POLL_TIMEOUT_S = 300.0
 
@@ -159,32 +172,106 @@ def run_gladia(path: Path, key: str) -> str:
                      lambda d: d["result"]["transcription"]["full_transcript"])
 
 
-def run_soniox(path: Path, key: str) -> str:
-    """Upload file → tạo transcription (language_hints) → poll → transcript text."""
-    headers = {"Authorization": f"Bearer {key}"}
+def _wav_pcm16_mono_16k(path: Path) -> bytes:
+    """PCM16 mono 16k cho đường realtime. WAV đúng format đọc thẳng bằng `wave`;
+    format khác → resample qua ffmpeg (pattern app/denoise._load_audio)."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            if (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (
+                1, 2, cloud_stt.SAMPLE_RATE,
+            ):
+                return w.readframes(w.getnframes())
+    except (wave.Error, EOFError):
+        pass  # không phải WAV chuẩn — để ffmpeg decode
+    cmd = [
+        "ffmpeg", "-nostdin", "-threads", "0", "-i", str(path),
+        "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le",
+        "-ar", str(cloud_stt.SAMPLE_RATE), "-",
+    ]
+    try:
+        return subprocess.run(cmd, capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            f"audio không phải WAV PCM16 mono 16k và resample ffmpeg thất bại: {exc}"
+        ) from exc
+
+
+def run_soniox_rt(path: Path, _key: str) -> str:
+    """ĐƯỜNG LIVE THẬT: class production `app.cloud_stt.SonioxLive` (WS stt-rt-v5),
+    connect mặc định (SonioxLive tự đọc SONIOX_API_KEY). Feed PCM từng chunk
+    RT_CHUNK_BYTES rồi stop(); text gom từ on_final. Các leg khác là batch —
+    chỉ leg này đo đúng chất lượng đường live."""
+    pcm = _wav_pcm16_mono_16k(path)
+    finals: list[str] = []
+    errors: list[str] = []
+    spec = cloud_stt.LiveCloudSpec(
+        language="vi",
+        context=None,
+        on_partial=lambda _text, _start: None,
+        on_final=lambda text, _start, _speaker: finals.append(text),
+        on_error=errors.append,
+    )
+    live = cloud_stt.SonioxLive(spec)
+    live.start()
+    for i in range(0, len(pcm), RT_CHUNK_BYTES):
+        live.feed(pcm[i:i + RT_CHUNK_BYTES])
+    live.stop(timeout=POLL_TIMEOUT_S)
+    if errors:
+        raise RuntimeError(f"Soniox realtime lỗi: {errors[0]}")
+    if not finals:
+        raise RuntimeError("Soniox realtime không trả final nào (timeout/audio rỗng?)")
+    return " ".join(finals)
+
+
+def run_soniox_async(path: Path, _key: str) -> str:
+    """Async production: `app.cloud_stt.transcribe_file_async` (stt-async-v5) —
+    upload → poll → text, LUÔN xóa file/transcription phía Soniox khi xong."""
+    spec = cloud_stt.AsyncJobSpec(language="vi", timeout_s=POLL_TIMEOUT_S)
+    return cloud_stt.transcribe_file_async(path, spec)
+
+
+def run_deepgram(path: Path, key: str) -> str:
+    """BATCH pre-recorded nova-3 — cận trên chất lượng Deepgram, KHÔNG phải
+    streaming (đường live Deepgram là WS riêng, không đo ở đây)."""
+    with httpx.Client(timeout=POLL_TIMEOUT_S) as c:
+        r = c.post(
+            DEEPGRAM_URL,
+            params={"model": "nova-3", "language": "vi", "smart_format": "true"},
+            headers={"Authorization": f"Token {key}", "Content-Type": "audio/wav"},
+            content=path.read_bytes(),
+        )
+        r.raise_for_status()
+        return str(r.json()["results"]["channels"][0]["alternatives"][0]["transcript"])
+
+
+def run_assemblyai(path: Path, key: str) -> str:
+    """BATCH async AssemblyAI — cận trên chất lượng, KHÔNG phải streaming.
+
+    Tiếng Việt: language_code="vi"; `speech_model` (số ít) đã deprecated → dùng
+    speech_models=["universal-3-5-pro", "universal-2"], cả hai hỗ trợ vi và
+    route model đứng trước (docs/speech-to-text/pre-recorded-audio/supported-languages).
+    """
+    headers = {"authorization": key}
     with httpx.Client(timeout=60.0) as c:
-        with path.open("rb") as f:
-            up = c.post(f"{SONIOX_BASE}/files", headers=headers,
-                        files={"file": (path.name, f, "audio/wav")})
+        up = c.post(f"{AAI_BASE}/upload", headers=headers, content=path.read_bytes())
         up.raise_for_status()
         job = c.post(
-            f"{SONIOX_BASE}/transcriptions", headers=headers,
-            json={"file_id": up.json()["id"], "model": SONIOX_MODEL,
-                  "language_hints": list(LANGS)},
+            f"{AAI_BASE}/transcript", headers=headers,
+            json={"audio_url": up.json()["upload_url"], "language_code": "vi",
+                  "speech_models": ["universal-3-5-pro", "universal-2"]},
         )
         job.raise_for_status()
-        tid = job.json()["id"]
-
-        def pick(_data: dict) -> str:
-            tr = c.get(f"{SONIOX_BASE}/transcriptions/{tid}/transcript", headers=headers)
-            tr.raise_for_status()
-            body = tr.json()
-            return body.get("text") or "".join(t.get("text", "") for t in body.get("tokens", []))
-
-        return _poll(c, f"{SONIOX_BASE}/transcriptions/{tid}", headers, "completed", "error", pick)
+        return _poll(c, f"{AAI_BASE}/transcript/{job.json()['id']}", headers,
+                     "completed", "error", lambda d: str(d.get("text") or ""))
 
 
-CLOUD_RUNNERS = {"gladia": (run_gladia, "GLADIA_API_KEY"), "soniox": (run_soniox, "SONIOX_API_KEY")}
+CLOUD_RUNNERS = {
+    "gladia": (run_gladia, "GLADIA_API_KEY"),
+    "soniox": (run_soniox_async, "SONIOX_API_KEY"),
+    "soniox-rt": (run_soniox_rt, "SONIOX_API_KEY"),
+    "deepgram": (run_deepgram, "DEEPGRAM_API_KEY"),
+    "assemblyai": (run_assemblyai, "ASSEMBLYAI_API_KEY"),
+}
 
 
 def evaluate(name: str, text: str, ref: str | None, ref_terms: set[str]) -> EngineResult:
@@ -271,8 +358,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="So mlx-whisper vs cloud STT trên bản ghi Việt–Anh")
     ap.add_argument("--id", required=True, help="id bản ghi trong SQLite")
     ap.add_argument("--engines", default="mlx,qwen3",
-                    help="engine phẩy ngăn cách: mlx, qwen3, qwen3-large (local); "
-                         "gladia, soniox (cloud, cần key)")
+                    help="engine phẩy ngăn cách: mlx, qwen3, qwen3-large, whisper-turbo, "
+                         "whisper-v3 (local); soniox-rt (live thật), soniox (async), "
+                         "deepgram, assemblyai, gladia (batch) — cloud cần key")
     ap.add_argument("--ref", choices=("golden", "edited", "final"), default="edited",
                     help="nguồn bản chuẩn để tính WER (mặc định edited)")
     ap.add_argument("--redecode", action="store_true",
