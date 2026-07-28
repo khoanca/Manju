@@ -56,6 +56,17 @@ $("swLocalAudio").onclick = () => {
 
 // ── Settings phía server (engine, thư mục audio) ───────────────────────────
 let diarizeReady = false;  // model đã tải chưa → cho phép bật pass 3
+// T-007 (FR-10): trạng thái cloud STT từ /api/settings — cache 1 lần cho start
+// card + upload; lỗi fetch → coi như không có tier online.
+let cloudInfo = null;
+async function fetchCloudInfo(){
+  if (cloudInfo) return cloudInfo;
+  try {
+    const s = await (await fetch("/api/settings")).json();
+    cloudInfo = s.cloud || { available: false };
+  } catch { cloudInfo = { available: false }; }
+  return cloudInfo;
+}
 async function loadServerSettings(){
   try {
     const s = await (await fetch("/api/settings")).json();
@@ -101,6 +112,13 @@ async function loadServerSettings(){
     // Lớp B/C: toggle tự đoán ngành + danh sách ngành để research
     $("domainAuto").checked = s.domain_auto !== false;
     populateDomainPick(s.domains || []);
+    // T-007 (FR-10): tier cloud STT — card settings + select upload chỉ hiện khi có key
+    const cl = s.cloud || { available: false };
+    cloudInfo = cl;
+    $("cloudSection").classList.toggle("hidden", !cl.available);
+    $("upEngineRow").classList.toggle("hidden", !cl.available);
+    $("swCloudCleanup").classList.toggle("on", !!cl.cleanup);
+    $("swCloudRelisten").classList.toggle("on", !!cl.relisten);
     syncLexBtn();
   } catch { $("engineVal").textContent = "—"; }
 }
@@ -125,6 +143,17 @@ Object.keys(SRV_SW).forEach(id => $(id).onclick = async () => {
     await fetch("/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [SRV_SW[id]]: on ? "1" : "0" }),
+    });
+  } catch { $(id).classList.toggle("on"); }
+});
+// T-007 (FR-10): toggle cloud STT — PUT boolean (khác SRV_SW dạng "0"/"1").
+const CLOUD_SW = { swCloudCleanup: "cloud_cleanup", swCloudRelisten: "cloud_relisten" };
+Object.keys(CLOUD_SW).forEach(id => $(id).onclick = async () => {
+  const on = $(id).classList.toggle("on");
+  try {
+    await fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [CLOUD_SW[id]]: on }),
     });
   } catch { $(id).classList.toggle("on"); }
 });
@@ -1325,6 +1354,8 @@ go.onclick = async () => {
   const fd = new FormData();
   fd.append("file", chosen); fd.append("language", $("lang").value); fd.append("model", $("model").value);
   fd.append("prompt", $("prompt").value); fd.append("correct", $("correct").checked);
+  // T-007 (FR-10): select ẩn khi không có key → giữ mặc định "local"
+  fd.append("engine", cloudInfo && cloudInfo.available ? $("upEngine").value : "local");
   downloadName = chosen.name.replace(/\.[^.]+$/, "") + ".txt";
   try {
     const r = await fetch("/api/transcribe", { method:"POST", body:fd });
@@ -1398,7 +1429,9 @@ class LiveConn {
     };
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
-      if (m.type === "session"){ this.token = m.token; return; }
+      // T-007: session vẫn bị nuốt để lấy token, nhưng có m.mode (tier thực
+      // được cấp) thì forward lên onMsg cho UI hiện badge online/offline.
+      if (m.type === "session"){ this.token = m.token; if (m.mode) this.onMsg(m); return; }
       if (m.type === "ack"){ this._prune(m.bytes); return; }
       if (m.type === "resumed"){ this._prune(m.bytes); this._replay(m.bytes); this.onState("resumed"); return; }
       this.onMsg(m);
@@ -1445,6 +1478,23 @@ function enterRecord(){
   if (live){ showStartCard(false); return; }   // đang ghi → về thẳng màn ghi
   showStartCard(true);
   loadParticipants();
+  loadLiveModePick();
+}
+
+// ── T-007 (FR-10): chọn tier nhận dạng online/offline ở start card ─────────
+const MODE_KEY = "manju.liveMode";
+async function loadLiveModePick(){
+  const cl = await fetchCloudInfo();
+  $("mtModeLbl").classList.toggle("hidden", !cl.available);
+  $("mtModePick").classList.toggle("hidden", !cl.available);
+  if (!cl.available) return;
+  const saved = localStorage.getItem(MODE_KEY) === "offline" ? "offline" : "online";
+  document.querySelector(`#mtModePick input[value="${saved}"]`).checked = true;
+}
+function liveModeChoice(){
+  if (!cloudInfo || !cloudInfo.available) return "offline";
+  const sel = document.querySelector("#mtModePick input:checked");
+  return sel ? sel.value : "online";
 }
 function showStartCard(on){
   $("startCard").classList.toggle("hidden", !on);
@@ -1497,6 +1547,8 @@ $("startBtn").onclick = () => {
   if (ids.length) meta.participants = ids;
   const title = $("mtTitle").value.trim(); if (title) meta.title = title;
   const agenda = $("mtAgenda").value.trim(); if (agenda) meta.agenda = agenda;
+  meta.mode = liveModeChoice();   // T-007: tier xin server — server có thể rớt về offline
+  if (cloudInfo && cloudInfo.available) localStorage.setItem(MODE_KEY, meta.mode);
   showStartCard(false);
   startLive(meta);
 };
@@ -1533,8 +1585,10 @@ async function startLive(meta){
   );
   live = { conn, ctx, stream, opfs: useOpfs ? startOpfsWriter() : null,
            stopping:false, paused:false, base:0, resumeAt:Date.now(),
+           requestedMode: (meta && meta.mode) || "offline",   // T-007: tier đã xin
            timer:setInterval(tickTimer,300) };
   subs.innerHTML = ""; recTimer.textContent = "00:00:00";
+  $("modeBadge").classList.add("hidden");   // T-007: chờ msg session báo tier thực
   setPill("KẾT NỐI…", true); setWave("on");
   $("recPause").textContent = "❚❚ Pause";
   recHint.textContent = useOpfs
@@ -1551,7 +1605,20 @@ async function startLive(meta){
 
 function handleLiveMsg(m){
   if (!live) return;   // phiên đã rời (Stop → handler nền) — không đụng DOM màn ghi
+  if (m.type === "session"){   // T-007: badge tier thực được cấp (LiveConn forward khi có m.mode)
+    $("modeBadge").textContent = m.mode === "online" ? "☁ Online" : "🖥 Offline";
+    $("modeBadge").classList.remove("hidden");
+    if (live.requestedMode === "online" && m.mode !== "online")
+      recHint.textContent = "Không kết nối được dịch vụ online — đang chạy offline.";
+    return;
+  }
   if (m.type === "ready"){ setPill("RECORDING", true); return; }
+  if (m.type === "mode"){   // FR-10: provider chết giữa phiên → server tự rơi về offline
+    $("modeBadge").textContent = m.mode === "online" ? "☁ Online" : "🖥 Offline";
+    $("modeBadge").classList.remove("hidden");
+    if (m.message) recHint.textContent = m.message;
+    return;
+  }
   if (m.type === "error"){ setPill("LỖI", false); recHint.textContent = m.message; return; }
   if (m.type === "partial"){
     const el = subEl(m.utt); el.classList.add("partial");

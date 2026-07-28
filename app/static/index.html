@@ -161,6 +161,18 @@
   .mt-parts{ display:flex; flex-direction:column; gap:8px; padding:2px 12px 12px; max-height:200px; overflow-y:auto; }
   .mt-parts label{ display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer; }
   .start-card .go-btn{ margin-top:10px; }
+  /* T-007 (FR-10): chọn tier nhận dạng (cloud STT) — radio ở start card, select ở upload */
+  .mode-pick{ display:flex; flex-direction:column; gap:8px; }
+  .mode-pick label{ display:flex; align-items:flex-start; gap:10px; border:1px solid var(--line);
+               border-radius:12px; padding:10px 12px; background:var(--card-2); cursor:pointer; }
+  .mode-pick label:has(input:checked){ border-color:var(--accent); }
+  .mode-pick input{ margin-top:3px; accent-color:var(--accent); flex:0 0 auto; }
+  .mode-pick b{ font-size:14px; display:block; }
+  .mode-pick small{ color:var(--muted); font-size:12px; line-height:1.45; display:block; }
+  .up-engine{ display:flex; flex-direction:column; gap:7px; margin-bottom:16px; }
+  .up-engine select{ border:1px solid var(--line); border-radius:11px; padding:9px 11px;
+               font-size:14px; font-weight:600; background:var(--card); outline:none; width:100%; }
+  .up-engine select:focus{ border-color:var(--accent); }
 
   .rec-controls{ display:flex; gap:14px; margin-top:20px; }
   .btn-pause{ flex:1 1 auto; background:var(--card); border-radius:40px; padding:16px; box-shadow:var(--sh-sm);
@@ -346,7 +358,8 @@
     .search input, .set-row select, .set-row textarea, #audioDir, #result,
     .filters select, .filters input, .seg-edit,
     .corr-filters select, .corr-filters input, .corr-update input, .tag-edit,
-    .start-card input, .start-card textarea, .spk-row select{ font-size:16px; }
+    .start-card input, .start-card textarea, .spk-row select,
+    .up-engine select{ font-size:16px; }
   }
 
   /* Điện thoại nhỏ (<380px): giảm padding & cỡ chữ lớn cho khỏi tràn */
@@ -544,6 +557,18 @@
       <input id="mtTitle" placeholder="VD: Họp sprint tuần này…" />
       <span class="f-lbl">Agenda</span>
       <textarea id="mtAgenda" rows="2" placeholder="Nội dung dự kiến (tuỳ chọn)…"></textarea>
+      <!-- T-007 (FR-10): chọn tier nhận dạng — chỉ hiện khi server có key Soniox -->
+      <span class="f-lbl hidden" id="mtModeLbl">Nhận dạng</span>
+      <div class="mode-pick hidden" id="mtModePick">
+        <label>
+          <input type="radio" name="liveMode" value="online" checked />
+          <span><b>Online (Soniox)</b><small>Chính xác thuật ngữ hơn, tách người nói · dịch vụ trả phí, audio stream tới Soniox để nhận dạng (không lưu ở đó)</small></span>
+        </label>
+        <label>
+          <input type="radio" name="liveMode" value="offline" />
+          <span><b>Offline (trên máy)</b><small>Chạy hoàn toàn trên máy, không cần mạng</small></span>
+        </label>
+      </div>
       <span class="f-lbl hidden" id="mtPartLbl">Người tham gia</span>
       <details class="mt-dd hidden" id="mtPartDD">
         <summary><span id="mtPartSummary" class="ph">Chọn người tham gia…</span></summary>
@@ -558,6 +583,7 @@
       <span class="spark" style="right:30px;bottom:60px;font-size:14px">✦</span>
       <span class="spark" style="right:60px;top:40px;font-size:12px">✧</span>
       <div class="pill live" id="recPill"><span class="dot"></span> RECORDING</div>
+      <span class="pill hidden" id="modeBadge" style="margin-left:8px"></span>
       <div class="wave" id="wave"></div>
       <div class="timer" id="recTimer">00:00:00</div>
     </div>
@@ -660,6 +686,23 @@
           <div class="set-ico">📂</div>
           <div class="set-main"><b>Khử ồn cho file tải lên</b><small>Áp dụng cả khi transcribe file</small></div>
           <div class="sw" id="swDnUpload"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- T-007 (FR-10): cloud STT — chỉ hiện khi server có key Soniox -->
+    <div class="hidden" id="cloudSection">
+      <div class="sec-label">Nhận dạng online (Soniox)</div>
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-ico">✨</div>
+          <div class="set-main"><b>AI làm sạch transcript (pass 2)</b><small>Soát &amp; sửa thuật ngữ cho bản ghi online</small></div>
+          <div class="sw" id="swCloudCleanup"></div>
+        </div>
+        <div class="set-row">
+          <div class="set-ico">🎧</div>
+          <div class="set-main"><b>Nghe lại bằng model async sau khi Dừng</b><small>Chính xác hơn</small></div>
+          <div class="sw" id="swCloudRelisten"></div>
         </div>
       </div>
     </div>
@@ -775,6 +818,14 @@
       <div class="fname" id="fileName"></div>
     </div>
     <input type="file" id="file" class="hidden" accept="audio/*,video/*" />
+    <!-- T-007 (FR-10): chọn engine nhận dạng — chỉ hiện khi server có key Soniox -->
+    <div class="up-engine hidden" id="upEngineRow">
+      <span class="f-lbl">Nhận dạng</span>
+      <select id="upEngine">
+        <option value="local">Trên máy</option>
+        <option value="cloud">Online (Soniox)</option>
+      </select>
+    </div>
     <button class="go-btn" id="go" disabled>Transcribe</button>
     <div class="status" id="status"></div>
     <div class="bar"><i id="bar"></i></div>
