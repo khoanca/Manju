@@ -1,7 +1,7 @@
 # BRD – App Transcribe cuộc họp
 
 **Phiên bản:** 1.3 · **Ngày:** 2026-07-09 · **Trạng thái:** Draft
-**Tài liệu liên quan:** [PRD.md](PRD.md) — spec chi tiết mô hình local-first + tổ chức, phân đợt build.
+**Tài liệu liên quan:** [PRD.md](PRD.md) — spec chi tiết mô hình lưu local / xử lý hybrid online-first + tổ chức, phân đợt build.
 
 ## 1. Mục đích
 App chạy **local** (riêng tư, miễn phí) để chuyển đoạn ghi âm cuộc họp / hội thoại khách hàng thành **văn bản đầy đủ** (voice-to-text).
@@ -33,7 +33,7 @@ App chạy **local** (riêng tư, miễn phí) để chuyển đoạn ghi âm cu
 
 ### YC-5 — Đa máy, đa người dùng, tổ chức
 - Hệ thống dùng được trên **nhiều loại máy**: máy mạnh tự dùng engine tốt nhất có sẵn; máy yếu/điện thoại dùng qua browser (PWA).
-- **Dữ liệu local-first:** audio + text của mỗi người nằm trên máy người đó (text trong database local, audio trong thư mục user tự chọn được).
+- **Dữ liệu LƯU local, xử lý được phép online (đổi định hướng 2026-07-28):** audio + text của mỗi người lưu trên máy người đó (text trong database local, audio trong thư mục user tự chọn được). Khi user bật online, audio stream tới dịch vụ STT đã chọn CHỈ để transcribe (không thành bản lưu ở bên thứ ba); offline vẫn chạy đủ bằng engine local.
 - **Tổ chức:** mỗi người một tài khoản riêng, admin tổ chức invite; user chọn từng bản transcript để đẩy **text** (không audio) lên database online của tổ chức; admin thấy tất cả và cấp quyền xem cho từng người. Chi tiết: PRD FR-5.
 
 ## 3. Ngoài phạm vi (chưa làm)

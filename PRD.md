@@ -1,15 +1,16 @@
 # PRD – Manju: Meeting Transcriber local-first + tổ chức
 
-**Phiên bản:** 1.0 · **Ngày:** 2026-07-09 · **Trạng thái:** Approved (đang build Đợt 1)
+**Phiên bản:** 1.1 · **Ngày:** 2026-07-28 (v1.0: 2026-07-09) · **Trạng thái:** Approved (đang build; v1.1 đổi định hướng xử lý sang hybrid online-first — FR-10)
 **Tài liệu liên quan:** [BRD.md](BRD.md) (yêu cầu nghiệp vụ gốc — transcribe, pass 2, live)
 
 ## 1. Tổng quan mô hình
 
-Hệ thống theo mô hình **local-first + org sync**:
+Hệ thống theo mô hình **lưu local — xử lý hybrid (online-first) + org sync** (đổi định hướng 2026-07-28; trước đó: local-first toàn phần):
 
-- **Dữ liệu của ai nằm trên máy người đó.** Audio (nặng, riêng tư nhất) là file trong thư mục user tự chọn, không bao giờ tự rời máy. Text + metadata nằm trong database local (SQLite).
+- **Dữ liệu của ai LƯU trên máy người đó.** Audio (nặng, riêng tư nhất) là file trong thư mục user tự chọn; text + metadata trong database local (SQLite). Không bản lưu nào tự sinh ở bên thứ ba.
+- **Xử lý được phép online, offline vẫn chạy đủ.** Khi có mạng + API key, ASR live/upload ưu tiên cloud streaming STT (tier `cloud`, FR-10) và pass 2 có thể dùng cloud LLM; audio chỉ STREAM tới provider user đã bật để transcribe — không phải sync lưu trữ. Mất mạng/không key → tự rơi về engine local (mlx → cuda → cpu), không mất tính năng.
 - **Tổ chức là lớp cộng tác, chỉ nhận text.** Mỗi người có tài khoản riêng trên org cloud (Supabase); user **chủ động chọn từng bản** transcript để đẩy text lên org DB. Không sync audio, không sync tự động.
-- **Máy nào cũng dùng được, máy mạnh tự phát huy.** App dò năng lực máy lúc khởi động và chọn engine ASR tốt nhất có trên máy đó; điện thoại/máy yếu dùng qua browser (PWA) làm client mỏng.
+- **Máy nào cũng dùng được, máy mạnh tự phát huy.** App dò năng lực máy + mạng lúc khởi động và chọn engine ASR tốt nhất khả dụng (cloud khi online, local theo tier máy); điện thoại/máy yếu dùng qua browser (PWA) làm client mỏng.
 
 ### Hai loại client
 
@@ -24,9 +25,9 @@ Hệ thống theo mô hình **local-first + org sync**:
 ## 2. Yêu cầu chức năng
 
 ### FR-1 — Engine ASR theo năng lực máy (EngineRegistry)
-- Probe lúc khởi động, chọn tier đầu tiên thỏa: **mlx** (Mac Apple Silicon, GPU Metal) → *(dành chỗ: native ANE khi Apple thêm vi_VN — xem BRD mục 4 Phase 0/1)* → **cuda** (GPU NVIDIA, faster-whisper float16) → **cpu** (faster-whisper int8; cỡ model theo RAM/core của máy).
+- Probe lúc khởi động, chọn tier đầu tiên thỏa: **cloud** (streaming STT online — mặc định khi có mạng + key, user chọn per-phiên ở start card; FR-10) → **mlx** (Mac Apple Silicon, GPU Metal) → *(dành chỗ: native ANE khi Apple thêm vi_VN — xem BRD mục 4 Phase 0/1)* → **cuda** (GPU NVIDIA, faster-whisper float16) → **cpu** (faster-whisper int8; cỡ model theo RAM/core của máy).
 - Env `ASR_ENGINE` ép tier (phục vụ test/vận hành). UI hiển thị engine đang dùng.
-- Interface engine thống nhất cho cả live (decode partial/final) và upload (transcribe file), là điểm cắm cho tier `remote` (Đợt 3) và native.
+- Interface engine thống nhất cho cả live (decode partial/final) và upload (transcribe file), là điểm cắm cho tier `cloud` (FR-10), `remote` LAN (Đợt 3) và native.
 
 ### FR-2 — Lưu trữ local
 - **Text:** SQLite `data/manju.db` là nguồn chân lý (transcript, raw, segments, metadata, settings, trạng thái sync). Mỗi bản ghi vẫn xuất `{id}.txt` làm artifact đọc nhanh/grep.
@@ -94,6 +95,15 @@ Hệ thống theo mô hình **local-first + org sync**:
 - US-828 — Telemetry decode: mỗi utterance lưu temperature/compression_ratio/no_speech_prob thật/wall-time vào `raw_segments` — truy phiên lỗi không cần tái hiện.
 - Chi tiết AC/task: `docs/plan-live-reliability.md`.
 
+### FR-10 — Tier `cloud`: streaming STT online-first (net-new 2026-07-28)
+- Định hướng user chốt 2026-07-28: lưu local giữ nguyên, xử lý ASR ưu tiên online khi khả dụng. Nghiên cứu stack: `docs/research-online-stt-stack.md`.
+- Kiến trúc: GIỮ FastAPI + PWA + WS protocol hiện có, KHÔNG adopt Pipecat/LiveKit nguyên khối (app transcription-only không dùng turn-taking/TTS; đường Whisper local của Pipecat là segmented — thoái lui so với live loop hiện tại). Thêm đường streaming cloud trong `live.py`/`engines.py`: đẩy PCM liên tục tới provider, nhận interim/final passthrough; mlx-whisper large-v3-turbo + live loop hiện tại giữ nguyên làm fallback offline.
+- Provider: ứng viên chính **Soniox stt-rt-v5** (code-switch vi↔en native giữa câu, diarization gộp, $0.12/h); dự phòng AssemblyAI Universal-3.5 Pro Streaming ($0.45/h, $50 free), Deepgram Nova-3 `language=vi` ($0.29/h, $200 free). Không provider nào công bố WER vi streaming → chốt cuối bằng benchmark audio thật (`scripts/bench_cloud_stt.py`, thêm realtime legs) TRƯỚC khi build tích hợp.
+- Nhánh cloud (tinh chỉnh 2026-07-29): transcript Soniox thô là NGUỒN CHÂN LÝ (`raw_text`); glossary + tên người + cặp sửa đã duyệt đẩy vào context của provider; **pass 2 LLM thành hậu xử lý TÙY CHỌN, mặc định TẮT** — Whisper cần LLM vì phiên âm sai thuật ngữ, Soniox code-switch native có thể không cần; chỉ bật mặc định nếu benchmark chứng minh WER giảm mà không sinh substitution mới. Sau Stop: `stt-async-v5` nghe lại toàn bộ audio (~+$0.10/h) tạo bản lưu chuẩn hơn; job async phải XÓA file/transcript phía Soniox sau khi nhận kết quả (privacy: realtime không bị lưu, async lưu tới khi xóa, không dùng train — soniox.com/docs/security-and-privacy).
+- Nhánh local fallback: pass 2 giữ nguyên (gemma4:e4b local / OpenRouter); sau Stop cân nhắc re-transcribe WAV bằng large-v3-full nền (hạ tầng reanalyze sẵn có) để bản lưu vượt subtitle "an toàn" của live loop.
+- UX chế độ (chốt 2026-07-29): **chọn Online/Offline per-PHIÊN ở start card** (không phải cổng chặn khi vào site — người xem lịch sử không bị hỏi). Option Online kèm hint: chính xác thuật ngữ hơn + tách người nói, dịch vụ trả phí (~$0.12–0.22/h), audio stream tới provider để nhận dạng (không lưu ở đó); Offline: chạy hoàn toàn trên máy. Nhớ lựa chọn lần trước; mặc định online khi có key + mạng; upload chọn tương tự. Đang ghi online mà rớt mạng → phiên TỰ rơi về mlx không đứt (never-fail); badge engine đang dùng (FR-1). Client gửi `mode` trong message `start` của WS. Lưu ý tài nguyên: phiên online không chiếm `_decode_lock` → chỉ phiên offline tính vào giới hạn decode đồng thời.
+- AC/task chi tiết: `/plan-feature` khi bắt đầu build.
+
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).
 - Sync audio lên org.
@@ -103,5 +113,6 @@ Hệ thống theo mô hình **local-first + org sync**:
 ## 4. Phân đợt
 
 - **Đợt 1 — nền local (đang build):** EngineRegistry; SQLite + migration; thư mục audio configurable; multi-session; tách JS + lưu settings; wake lock; WS reconnect/resume; PWA + OPFS.
+- **Đợt 1.5 — cloud STT online-first (net-new 2026-07-28):** FR-10 — benchmark provider bằng audio thật → tier `cloud` streaming cho live + upload, fallback local nguyên trạng. Ưu tiên trước phần còn lại của Đợt 2.
 - **Đợt 2 — org cloud:** Supabase project (orgs, org_members, transcripts_text, visibility_grants + RLS; Edge Function invite); app local đăng nhập + push từng bản; màn org viewer + quản lý grants. Schema/flow chi tiết: `supabase/migrations/001_org.sql` (khi build).
 - **Đợt 3 — mở rộng:** tier ASR `remote` (máy yếu mượn máy mạnh); diarization FluidAudio + system audio tap (BRD mục 4 Phase 2–3); native ASR khi Apple thêm vi_VN vào SpeechTranscriber (probe sẵn: `native/bin/native-asr`).
