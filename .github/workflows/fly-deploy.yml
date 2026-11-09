@@ -1,0 +1,59 @@
+# Deploys Manju Enterprise to the Fly app named in fly.toml.
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   FLY_API_TOKEN      required. Fly dashboard → Tokens.
+#   SONIOX_API_KEY     required once: without it nobody can record or upload.
+#   OPENROUTER_API_KEY optional: turns on the "AI làm sạch" pass.
+name: fly-deploy
+on:
+  push:
+    branches: [main]
+    # A deploy restarts the machine and cuts live meetings; only changes that reach the image deploy.
+    paths-ignore: ["docs/**", "**.md", "tests/**", ".claude/**", ".cursor/**"]
+  workflow_dispatch:
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Read app name from fly.toml
+        run: |
+          set -eu
+          test -n "$FLY_API_TOKEN" || { echo "::error::Repository secret FLY_API_TOKEN is missing (Settings → Secrets and variables → Actions)."; exit 1; }
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          REGION=$(sed -n 's/^primary_region = "\(.*\)"/\1/p' fly.toml)
+          VOL=$(sed -n 's/^  source = "\(.*\)"/\1/p' fly.toml)
+          echo "APP=$APP" >> "$GITHUB_ENV"; echo "REGION=$REGION" >> "$GITHUB_ENV"; echo "VOL=$VOL" >> "$GITHUB_ENV"
+          flyctl status -a "$APP" || flyctl apps create "$APP"
+      - name: Ensure the data volume exists
+        run: |
+          set -eu
+          if ! flyctl volumes list -a "$APP" --json | jq -e --arg v "$VOL" 'map(select(.name == $v)) | length > 0' >/dev/null; then
+            flyctl volumes create "$VOL" -a "$APP" -r "$REGION" -s 1 -y
+          fi
+      - name: Stage API keys given as repository secrets
+        run: |
+          set -eu
+          args=""
+          [ -z "$SONIOX_API_KEY" ] || args="$args SONIOX_API_KEY=$SONIOX_API_KEY"
+          [ -z "$OPENROUTER_API_KEY" ] || args="$args OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+          [ -z "$args" ] || flyctl secrets set -a "$APP" --stage $args
+          if ! flyctl secrets list -a "$APP" --json | jq -e 'map(.Name // .name) | index("SONIOX_API_KEY")' >/dev/null; then
+            echo "::warning::SONIOX_API_KEY is not set on $APP: the site will open but recording and upload stay disabled."
+          fi
+      - name: Deploy
+        run: flyctl deploy --remote-only -a "$APP" --wait-timeout 900
+      - name: Check the site answers
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS -o /dev/null "https://$APP.fly.dev/"; then echo "https://$APP.fly.dev is up"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::https://$APP.fly.dev did not answer"; exit 1

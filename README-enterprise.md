@@ -30,6 +30,18 @@ docker run -d --name manju -p 8000:8000 \
   manju-enterprise
 ```
 
+### Fly.io (link công khai 24/24)
+
+Repo có sẵn `fly.toml` và workflow `.github/workflows/fly-deploy.yml`:
+
+1. Đổi `app` trong `fly.toml` nếu muốn tên khác (link là `https://<app>.fly.dev`).
+2. Thêm repository secret `FLY_API_TOKEN` và `SONIOX_API_KEY` (tuỳ chọn `OPENROUTER_API_KEY`) ở GitHub → Settings → Secrets and variables → Actions.
+3. Push lên `main` hoặc chạy tay workflow `fly-deploy`. Workflow tạo app, volume `/data` 1 GB, đưa key vào Fly, deploy rồi kiểm tra trang trả lời.
+
+Một machine luôn bật (WebSocket của buổi họp live cần vậy). Người đăng ký đầu tiên là admin, nên đăng ký ngay sau khi deploy.
+
+### Tự host khác
+
 Đặt sau reverse proxy có **HTTPS** (mic trong trình duyệt yêu cầu HTTPS trừ
 `localhost`). Image chạy `--proxy-headers` nên cookie `Secure` tự bật khi có
 `X-Forwarded-Proto: https`.
