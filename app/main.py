@@ -52,6 +52,8 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 # ── FR-11 Enterprise: gate đăng nhập + scope theo chủ bản ghi ──────────────
 _TRANSCRIPT_PATH = re.compile(r"^/api/transcripts/([^/]+)")
+# Không cần session: đăng ký/đăng nhập/đăng xuất/me. /api/auth/tokens thì CẦN.
+_PUBLIC_AUTH = {"/api/auth/register", "/api/auth/login", "/api/auth/logout", "/api/auth/me"}
 _ADMIN_ONLY = {("PUT", "/api/settings"), ("POST", "/api/lexicon/update"),
                ("POST", "/api/lexicon/domain-research"), ("POST", "/api/lexicon/slang-trend")}
 
@@ -68,7 +70,7 @@ def _scope_owner(request: Request) -> str | None:
 async def enterprise_gate(request: Request, call_next):
     request.state.user = None
     path = request.url.path
-    if not edition.is_enterprise() or not path.startswith("/api/") or path.startswith("/api/auth/"):
+    if not edition.is_enterprise() or not path.startswith("/api/") or path in _PUBLIC_AUTH:
         return await call_next(request)
     user = auth.user_from(request.cookies, request.headers.get("authorization"))
     try:

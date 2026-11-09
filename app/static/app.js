@@ -69,13 +69,17 @@ async function fetchCloudInfo(){
 }
 async function loadServerSettings(){
   try {
-    const s = await (await fetch("/api/settings")).json();
+    const r = await fetch("/api/settings");
+    if (!r.ok) return;   // 401 enterprise → enterprise.js đã mở cổng đăng nhập
+    const s = await r.json();
+    if (typeof applyEdition === "function") applyEdition(s);   // FR-11
+    const canEditGlossary = s.edition !== "enterprise" || (ME && ME.role === "admin");
     $("engineVal").textContent = s.engine.model;
     $("audioDir").value = s.audio_dir;
     // Glossary: server có → dùng làm chân lý (trừ khi user đang gõ dở);
     // server rỗng mà local có → đẩy lên MỘT lần (migration từ bản chỉ-localStorage).
     const remoteGlossary = s.glossary || "";
-    if (remoteGlossary){
+    if (remoteGlossary || !canEditGlossary){
       if (document.activeElement !== $("prompt") && $("prompt").value !== remoteGlossary){
         $("prompt").value = remoteGlossary;
         saveSettings();
@@ -251,7 +255,7 @@ const nfmt = (n) => (n||0).toLocaleString("en-US");
 
 // ── History ────────────────────────────────────────────────────────────────
 let ALL = [];
-async function loadHistory(){ ALL = await (await fetch("/api/transcripts")).json(); renderHistory(); }
+async function loadHistory(){ const r = await fetch("/api/transcripts"); ALL = r.ok ? await r.json() : []; renderHistory(); }   // 401 enterprise → rỗng, cổng đăng nhập lo
 
 const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const SORTERS = {
@@ -1355,7 +1359,8 @@ go.onclick = async () => {
   fd.append("file", chosen); fd.append("language", $("lang").value); fd.append("model", $("model").value);
   fd.append("prompt", $("prompt").value); fd.append("correct", $("correct").checked);
   // T-007 (FR-10): select ẩn khi không có key → giữ mặc định "local"
-  fd.append("engine", cloudInfo && cloudInfo.available ? $("upEngine").value : "local");
+  fd.append("engine", (typeof EDITION !== "undefined" && EDITION === "enterprise") ? "cloud"
+    : (cloudInfo && cloudInfo.available ? $("upEngine").value : "local"));
   downloadName = chosen.name.replace(/\.[^.]+$/, "") + ".txt";
   try {
     const r = await fetch("/api/transcribe", { method:"POST", body:fd });
@@ -1485,9 +1490,11 @@ function enterRecord(){
 const MODE_KEY = "manju.liveMode";
 async function loadLiveModePick(){
   const cl = await fetchCloudInfo();
-  $("mtModeLbl").classList.toggle("hidden", !cl.available);
-  $("mtModePick").classList.toggle("hidden", !cl.available);
-  if (!cl.available) return;
+  // FR-11 enterprise: luôn Soniox direct — không có lựa chọn offline
+  const show = cl.available && !(typeof EDITION !== "undefined" && EDITION === "enterprise");
+  $("mtModeLbl").classList.toggle("hidden", !show);
+  $("mtModePick").classList.toggle("hidden", !show);
+  if (!show) return;
   const saved = localStorage.getItem(MODE_KEY) === "offline" ? "offline" : "online";
   document.querySelector(`#mtModePick input[value="${saved}"]`).checked = true;
 }
@@ -1558,6 +1565,8 @@ function setWave(state){ wave.classList.toggle("on", state === "on"); wave.class
 function tickTimer(){ if (!live) return; const el = live.base + (live.paused ? 0 : (Date.now() - live.resumeAt)/1000); recTimer.textContent = fmtClock(el); }
 
 async function startLive(meta){
+  // FR-11 enterprise: PCM → Soniox trực tiếp + OPFS, server chỉ nhận text (enterprise.js).
+  if (typeof EDITION !== "undefined" && EDITION === "enterprise") return startLiveDirect(meta);
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
@@ -1605,7 +1614,9 @@ async function startLive(meta){
 
 function handleLiveMsg(m){
   if (!live) return;   // phiên đã rời (Stop → handler nền) — không đụng DOM màn ghi
+  if (m.type === "ack_utt"){ if (live.pendingUtts) live.pendingUtts.delete(m.utt); return; }   // FR-11 direct
   if (m.type === "session"){   // T-007: badge tier thực được cấp (LiveConn forward khi có m.mode)
+    if (m.mode === "direct") return;   // enterprise: badge đã đặt trong startLiveDirect
     $("modeBadge").textContent = m.mode === "online" ? "☁ Online" : "🖥 Offline";
     $("modeBadge").classList.remove("hidden");
     if (live.requestedMode === "online" && m.mode !== "online")
@@ -1674,6 +1685,7 @@ $("recStop").onclick = stopLive;
 $("recClose").onclick = () => { if (live) stopLive(); else showScreen("home"); };
 function stopLive(){
   if (!live || live.stopping) return;
+  if (live.soniox) return stopLiveDirect();   // FR-11: chờ Soniox chốt token rồi mới "stop"
   live.stopping = true;
   stopAudio();
   const { conn, opfs } = live;

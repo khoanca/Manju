@@ -36,6 +36,13 @@
                 padding-bottom:calc(24px + env(safe-area-inset-bottom)); }
   @keyframes fade{ from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:none; } }
   .hidden{ display:none !important; }
+  /* FR-11: bản enterprise ẩn các mục chỉ có ý nghĩa khi ASR chạy trên máy */
+  body.enterprise .local-only{ display:none !important; }
+  #authGate{ position:fixed; inset:0; z-index:2000; background:var(--bg,#f4f6fb); display:flex; align-items:center; justify-content:center; padding:20px; }
+  #authGate .start-card{ width:min(420px,100%); }
+  #authGate .err{ color:#c0392b; font-size:13px; min-height:18px; margin:6px 0; }
+  #authGate .link{ background:none; border:0; color:var(--accent,#3b6cf5); cursor:pointer; font-size:13.5px; padding:6px 0; }
+  #tokenOnce code{ display:block; word-break:break-all; background:var(--card,#fff); padding:8px; border-radius:8px; font-size:12.5px; margin:6px 0; }
 
   /* status bar mock — ẩn: trên browser thật nó hiện giờ giả "9:41",
      còn PWA standalone đã có status bar thật của hệ điều hành */
@@ -456,6 +463,37 @@
 </style>
 </head>
 <body>
+<!-- FR-11 Enterprise: cổng đăng nhập (chỉ hiện khi server trả 401) -->
+<div id="authGate" class="hidden">
+  <div class="start-card">
+    <div class="brand" style="margin-bottom:10px"><b>Manju</b><sup>®</sup> <small style="color:var(--muted)">Enterprise</small></div>
+    <div id="authLogin">
+      <span class="f-lbl">Số điện thoại</span>
+      <input id="authPhone" inputmode="tel" autocomplete="username" placeholder="09xxxxxxxx" />
+      <span class="f-lbl">Mật khẩu</span>
+      <input id="authPass" type="password" autocomplete="current-password" />
+      <div class="err" id="authErr"></div>
+      <button class="go-btn" id="authLoginBtn">Đăng nhập</button>
+      <button class="link" id="authToReg">Chưa có tài khoản? Đăng ký</button>
+    </div>
+    <div id="authRegister" class="hidden">
+      <span class="f-lbl">Họ tên</span>
+      <input id="regName" autocomplete="name" placeholder="Nguyễn Văn A" />
+      <span class="f-lbl">Số điện thoại</span>
+      <input id="regPhone" inputmode="tel" autocomplete="username" placeholder="09xxxxxxxx" />
+      <span class="f-lbl">Mật khẩu (≥ 6 ký tự)</span>
+      <input id="regPass" type="password" autocomplete="new-password" />
+      <button class="go-btn" id="authRegBtn">Đăng ký</button>
+      <button class="link" id="authToLogin">Đã có tài khoản? Đăng nhập</button>
+      <small style="color:var(--muted)">Người đăng ký đầu tiên là admin. Tài khoản sau cần admin duyệt.</small>
+    </div>
+    <div id="authPending" class="hidden">
+      <h3 style="margin:0 0 8px">⏳ Chờ admin duyệt</h3>
+      <p style="color:var(--muted);font-size:13.5px">Tài khoản đã tạo. Nhờ admin vào Settings → Quản lý user để duyệt, rồi tải lại trang.</p>
+      <button class="link" id="authPendingLogout">Đăng xuất</button>
+    </div>
+  </div>
+</div>
 <div class="app">
   <div class="statusbar"><span>9:41</span><span class="ico">••• 📶 🔋</span></div>
 
@@ -624,7 +662,7 @@
         <div class="set-main"><b>Ngôn ngữ</b><small>Ngôn ngữ chính của hội thoại</small></div>
         <select id="lang"><option value="vi">Tiếng Việt</option><option value="en">English</option></select>
       </div>
-      <div class="set-row">
+      <div class="set-row local-only">
         <div class="set-ico">🎚️</div>
         <div class="set-main"><b>Chất lượng model</b><small>Chính xác ↔ tốc độ (file upload)</small></div>
         <select id="model">
@@ -639,22 +677,22 @@
         <div class="sw on" id="swCorrect"></div>
         <input type="checkbox" id="correct" checked class="hidden" />
       </div>
-      <div class="set-row" id="rowDiarize">
+      <div class="local-only set-row" id="rowDiarize">
         <div class="set-ico">🗣️</div>
         <div class="set-main"><b>Nhận diện người nói</b><small id="diarizeHint">Pass 3 — tách "ai nói câu nào" (cần tải model)</small></div>
         <div class="sw" id="swDiarize"></div>
       </div>
-      <div class="set-row" id="rowFlagWords">
+      <div class="local-only set-row" id="rowFlagWords">
         <div class="set-ico">🚩</div>
         <div class="set-main"><b>Đánh dấu từ nghe không rõ cho pass 2</b><small>Chậm hơn một chút</small></div>
         <div class="sw" id="swFlagWords"></div>
       </div>
-      <div class="set-row" id="rowDenoise">
+      <div class="local-only set-row" id="rowDenoise">
         <div class="set-ico">🎛️</div>
         <div class="set-main"><b>Khử ồn micro</b><small>Thử nghiệm</small></div>
         <div class="sw" id="swDenoise"></div>
       </div>
-      <div id="denoiseAdv" class="hidden">
+      <div id="denoiseAdv" class="local-only hidden">
         <div class="set-row">
           <div class="set-ico">🔊</div>
           <div class="set-main"><b>Cường độ khử</b><small>Càng cao càng mạnh tay</small></div>
@@ -691,7 +729,7 @@
     </div>
 
     <!-- T-007 (FR-10): cloud STT — chỉ hiện khi server có key Soniox -->
-    <div class="hidden" id="cloudSection">
+    <div class="hidden local-only" id="cloudSection">
       <div class="sec-label">Nhận dạng online (Soniox)</div>
       <div class="set-card">
         <div class="set-row">
@@ -712,6 +750,35 @@
       <textarea id="prompt" placeholder="deploy, API, sprint, staging, tên người, tên dự án…"></textarea>
     </div></div>
 
+    <!-- FR-11 Enterprise: tài khoản + API token cho LLM/MCP cá nhân + quản lý user (admin) -->
+    <div class="hidden" id="entSection">
+      <div class="sec-label">Tài khoản</div>
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-ico">👤</div>
+          <div class="set-main"><b id="entUserName"></b><small>Đang đăng nhập trên thiết bị này</small></div>
+          <button class="mini" id="entLogout">Đăng xuất</button>
+        </div>
+      </div>
+      <div class="sec-label">API token cho LLM (MCP)</div>
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-ico">🤖</div>
+          <div class="set-main"><b>Cắm LLM của bạn vào các cuộc họp</b><small>Token dùng cho <code>mcp_server/enterprise.py</code> — LLM chỉ đọc được đúng những bản ghi bạn được xem</small></div>
+          <button class="mini pri" id="tokenCreate">Tạo token</button>
+        </div>
+        <div class="set-row hidden" id="tokenOnce" style="display:block">
+          <small></small><code></code>
+          <button class="mini" id="tokenCopy">Sao chép</button>
+        </div>
+        <div id="tokenList"></div>
+      </div>
+      <div class="hidden" id="usersSection">
+        <div class="sec-label">Quản lý user (admin)</div>
+        <div class="set-card"><div id="userList"></div></div>
+      </div>
+    </div>
+
     <div class="sec-label">Chung</div>
     <div class="set-card">
       <div class="set-row">
@@ -719,17 +786,17 @@
         <div class="set-main"><b>Engine</b><small>Tự chọn theo năng lực máy chạy app</small></div>
         <div class="set-val" id="engineVal">…</div>
       </div>
-      <div class="set-row">
+      <div class="set-row local-only">
         <div class="set-ico">📲</div>
         <div class="set-main"><b>Lưu audio trên thiết bị này</b><small id="localAudioHint">Bản ghi âm nằm trong bộ nhớ trình duyệt, không gửi lên server — nhớ tải về nếu cần giữ lâu (iOS có thể tự dọn sau ~7 ngày không dùng)</small></div>
         <div class="sw" id="swLocalAudio"></div>
       </div>
-      <div class="set-row" id="rowOpfsExport">
+      <div class="local-only set-row" id="rowOpfsExport">
         <div class="set-ico">💾</div>
         <div class="set-main"><b>Tải bản ghi trong trình duyệt về máy</b><small id="opfsExportHint">Đang kiểm tra…</small></div>
         <button class="mini pri" id="opfsExport" disabled>Tải .zip</button>
       </div>
-      <div class="set-row" style="display:block">
+      <div class="set-row local-only" style="display:block">
         <div class="set-main" style="margin-bottom:8px"><b>Thư mục lưu audio</b><small>Trên máy chạy app · <span id="audioDirMsg"></span></small></div>
         <div style="display:flex; gap:8px">
           <input id="audioDir" placeholder="/Users/ban/Recordings" />
@@ -743,8 +810,8 @@
       </div>
     </div>
 
-    <div class="sec-label">Giọng đã lưu</div>
-    <div class="set-card">
+    <div class="sec-label local-only">Giọng đã lưu</div>
+    <div class="set-card local-only">
       <div id="speakerList" class="spk-list"><small style="color:var(--faint)">Chưa có giọng nào được ghi nhớ.</small></div>
     </div>
 
@@ -896,6 +963,8 @@
   </nav>
 </div>
 
+<script src="/static/direct-stt.js"></script>
+<script src="/static/enterprise.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
