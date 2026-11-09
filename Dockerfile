@@ -12,8 +12,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-# Deps ML (faster-whisper/torch) vẫn theo lockfile để không lệch với bản local —
-# image to nhưng tier local không chạy ở enterprise. Tách group deps = tech debt.
+# mlx-whisper (kéo torch + CUDA, ~2,8 GB) chỉ cài trên macOS arm64 nên không vào
+# image này. faster-whisper/sherpa-onnx/noisereduce vẫn theo lockfile vì app còn
+# import numpy và faster_whisper.vad lúc khởi động — tách nốt = tech debt.
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
