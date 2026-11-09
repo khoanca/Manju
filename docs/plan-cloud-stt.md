@@ -23,6 +23,7 @@ Nhánh cloud là một "bộ não decode" thay thế bên trong `LiveSession` hi
 | T-008 | Tests: cloud_stt (utt grouping, context cap, fake WS transport, async poll+delete, error paths), live online e2e (fake transport → partial/final/save, fallback mid-session, cloud_cleanup on/off), settings API, upload online | testing.md | → T-004..T-007 | tests/test_cloud_stt.py, tests/test_live_cloud.py | [x] |
 | T-009 | Bench legs realtime: `soniox-rt` (WS), cập nhật model async→stt-async-v5, thêm `assemblyai`/`deepgram` legs — chạy khi có key | FR-10 (gate benchmark) | ‖ | scripts/bench_cloud_stt.py | [x] |
 | T-010 | Docs write-back: plan ledger, project-state, PRD nếu lệch | guardrails spec-precedence | → hết | docs/* | [x] |
+| T-011 | Soniox v6 + auth header (2026-11-09): pin `stt-rt-v6`/`stt-async-v6` (v5 gỡ 2026-12-15); API key sang header `Authorization: Bearer` lúc `create_connection` — `connect(key)`, bỏ `api_key` khỏi start (Soniox từ chối kiểu cũ từ 2027-01-15, Online sẽ lặng lẽ fallback local) | research doc "Bổ sung 2026-11-09" | → T-002 | app/cloud_stt.py, tests, scripts/bench_cloud_stt.py, PRD | [x] |
 
 ## Edge Cases & Error Handling
 

@@ -47,7 +47,7 @@ def make_online(tmp_path, monkeypatch):
         real_cls = cloud_stt.SonioxLive
         monkeypatch.setattr(
             cloud_stt, "SonioxLive",
-            lambda spec: real_cls(replace(spec, connect=lambda: ws)),
+            lambda spec: real_cls(replace(spec, connect=lambda _key: ws)),
         )
         base = {"store_audio": False, "mode": "online"}
         base.update(cfg or {})

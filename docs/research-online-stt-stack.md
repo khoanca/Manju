@@ -73,8 +73,30 @@ User đưa bản phản biện (nguồn ngoài); kiểm chứng từng nhóm cla
 
 **Cần verify khi /plan-feature (chưa xác minh tường minh):** shape tham số context của Soniox (docs/stt/concepts/context — "structured context", chưa rõ field `terms`); hạn mức phiên đồng thời; hành vi reconnect giữa phiên.
 
+## Bổ sung 2026-11-09 — rà soát provider mới + 2 hạn chót Soniox
+
+Câu hỏi: bên nào MỚI NHẤT nhận tiếng Việt xen Anh giữa câu? Rà docs chính thức (qua search giới hạn domain hãng — môi trường chặn fetch trực tiếp; số liệu là hãng tự công bố):
+
+| Hãng | Model mới nhất | Ra mắt | vi xen en giữa câu | Giá live |
+|---|---|---|---|---|
+| **Soniox** | `stt-rt-v6` / `stt-async-v6` | **2026-11-03** | Có, 1 model 60+ langs, không cấu hình thêm | $0.12/h |
+| Google | Gemini 3.5 Transcribe (`gemini-3.5-transcribe-live`) | ~10/2026 (Cloud còn ghi live là preview) | Có: `vi-VN`, auto-detect 85+ langs, "mid-session code-mixing" | ~$0.009/phút ≈ $0.54/h |
+| AssemblyAI | Universal-3.6 Pro Realtime | ~2026-09-29 | Có: vi trong 32 langs, code-switch native; 100 keyterms đổi được giữa phiên | $0.45/h (+$0.12 diarization) |
+| OpenAI | `gpt-live-transcribe` | 2026-07-28 | `languages[]` nhiều ngôn ngữ nhưng CHƯA xác nhận có vi; không speaker/timestamp | ~$1.02/h |
+| Deepgram | Nova-3 multilingual (55 langs) | 2026 | CHƯA xác nhận vi trong `language=multi`; đợt 10/2026 chỉ cải thiện vi thuần | — |
+
+Kết luận: **giữ Soniox, nâng lên v6** (Manju chọn đúng hãng; v6 mới nhất thị trường). Thêm **Gemini 3.5 Transcribe** làm ứng viên benchmark mới; leg AssemblyAI nên dùng 3.6 thay 3.5. Vẫn KHÔNG hãng nào công bố WER vi code-switch (7.20% của AssemblyAI đo trên cặp ngôn ngữ châu Âu) → gate benchmark audio thật không đổi.
+
+**Hai hạn chót Soniox đã xử lý trong code (commit cùng ngày):**
+1. **2026-12-15 gỡ v5** — request v5 tự route sang v6, không gãy nhưng pin thẳng `RT_MODEL`/`ASYNC_MODEL` = v6 (nguồn phụ: v6 format số/tiền tệ khác v5 — soát khi smoke).
+2. **2027-01-15 từ chối kết nối WS chỉ gửi `api_key` trong message start** — code cũ gửi đúng kiểu đó, nghĩa là từ ngày này chế độ Online sẽ lặng lẽ không bao giờ mở được (phiên nào cũng fallback local, không báo lỗi). Đã chuyển key sang header `Authorization: Bearer` lúc `create_connection` (`_connect_real(key)`), bỏ `api_key` khỏi `_config()`; gửi cả 2 cách Soniox trả 400. REST async đã dùng Bearer từ đầu — không đổi.
+
 ## Nguồn chính
 
+- Soniox v6 + auth: soniox.com/docs/stt/models, /blog/soniox-stt-v6, /docs/guides/websocket-authentication, docs.soniox.com/api-reference/stt/websocket-api
+- Gemini 3.5 Transcribe: ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe, ai.google.dev/gemini-api/docs/pricing
+- AssemblyAI U3.6: assemblyai.com/blog/universal-3-6-pro-realtime, /products/streaming-speech-to-text
+- OpenAI: developers.openai.com/api/docs/models/gpt-live-transcribe, /api/docs/pricing
 - Pipecat: docs.pipecat.ai (supported-services, stt/whisper, transport/fastapi-websocket), github.com/pipecat-ai/pipecat
 - LiveKit: docs.livekit.io/agents (models, build/text)
 - Soniox: soniox.com/docs/stt/models, /pricing, blog bỏ free credits 2025-10-27

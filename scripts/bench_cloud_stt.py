@@ -7,10 +7,10 @@ tay: đọc key từ .env, dùng lại `app.accuracy` (WER/CER) và bản ghi tr
 
 Engines cloud:
   soniox-rt  : ĐƯỜNG LIVE THẬT — chạy đúng class production
-               `app.cloud_stt.SonioxLive` (WS stt-rt-v5), feed PCM16 mono 16k
+               `app.cloud_stt.SonioxLive` (WS stt-rt-v6), feed PCM16 mono 16k
                từng chunk 3200B như live.py. Số này mới là số của đường live.
   soniox     : async production — `app.cloud_stt.transcribe_file_async`
-               (stt-async-v5, tự xóa file/transcription phía Soniox khi xong).
+               (stt-async-v6, tự xóa file/transcription phía Soniox khi xong).
   gladia     : BATCH pre-recorded solaria-1 (code_switching vi+en).
   deepgram   : BATCH pre-recorded nova-3 — cận trên chất lượng, KHÔNG streaming.
   assemblyai : BATCH async universal-3-5-pro/universal-2 (language_code=vi) —
@@ -197,7 +197,7 @@ def _wav_pcm16_mono_16k(path: Path) -> bytes:
 
 
 def run_soniox_rt(path: Path, _key: str) -> str:
-    """ĐƯỜNG LIVE THẬT: class production `app.cloud_stt.SonioxLive` (WS stt-rt-v5),
+    """ĐƯỜNG LIVE THẬT: class production `app.cloud_stt.SonioxLive` (WS stt-rt-v6),
     connect mặc định (SonioxLive tự đọc SONIOX_API_KEY). Feed PCM từng chunk
     RT_CHUNK_BYTES rồi stop(); text gom từ on_final. Các leg khác là batch —
     chỉ leg này đo đúng chất lượng đường live."""
@@ -224,7 +224,7 @@ def run_soniox_rt(path: Path, _key: str) -> str:
 
 
 def run_soniox_async(path: Path, _key: str) -> str:
-    """Async production: `app.cloud_stt.transcribe_file_async` (stt-async-v5) —
+    """Async production: `app.cloud_stt.transcribe_file_async` (stt-async-v6) —
     upload → poll → text, LUÔN xóa file/transcription phía Soniox khi xong."""
     spec = cloud_stt.AsyncJobSpec(language="vi", timeout_s=POLL_TIMEOUT_S)
     return cloud_stt.transcribe_file_async(path, spec)

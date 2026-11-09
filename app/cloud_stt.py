@@ -1,11 +1,15 @@
 """Cloud STT (Soniox) — nhánh online của FR-10.
 
-Realtime: `SonioxLive` giữ WebSocket tới stt-rt-v5, nhận token liên tục và gom
+Realtime: `SonioxLive` giữ WebSocket tới stt-rt-v6, nhận token liên tục và gom
 thành utterance (khoảng lặng >= UTT_GAP_MS hoặc token "<end>") để tái dùng
 nguyên protocol partial/final của live.py. Async: `transcribe_file_async` cho
-re-listen sau Stop + upload online (stt-async-v5), xong PHẢI xóa file/
+re-listen sau Stop + upload online (stt-async-v6), xong PHẢI xóa file/
 transcription phía Soniox (privacy: realtime không bị lưu, async lưu tới khi
 xóa — soniox.com/docs/security-and-privacy).
+
+API key đi trong header `Authorization: Bearer` lúc mở WebSocket (field
+`api_key` trong message start đã deprecated; Soniox từ chối kết nối chỉ gửi
+key kiểu cũ từ 2027-01-15 — soniox.com/docs/guides/websocket-authentication).
 
 Transport injectable (connect factory / httpx client) — test chạy mock, không
 cần key. Mọi callback đều được nuốt lỗi: cloud hỏng không được phá phiên live.
@@ -25,8 +29,9 @@ from typing import Any, Protocol
 import httpx
 
 RT_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-RT_MODEL = "stt-rt-v5"
-ASYNC_MODEL = "stt-async-v5"
+# v5 bị gỡ 2026-12-15 (request v5 sau đó tự route sang v6) — pin thẳng v6.
+RT_MODEL = "stt-rt-v6"
+ASYNC_MODEL = "stt-async-v6"
 API_BASE = "https://api.soniox.com/v1"
 SAMPLE_RATE = 16000
 UTT_GAP_MS = 700  # khớp ENDPOINT_SILENCE_S của live.py
@@ -86,10 +91,12 @@ class _Transport(Protocol):
     def close(self) -> Any: ...
 
 
-def _connect_real() -> _Transport:
+def _connect_real(key: str) -> _Transport:
     from websocket import create_connection  # lazy: test không cần lib thật
 
-    return create_connection(RT_URL, timeout=10)  # type: ignore[no-any-return]
+    return create_connection(  # type: ignore[no-any-return]
+        RT_URL, timeout=10, header={"Authorization": f"Bearer {key}"}
+    )
 
 
 @dataclass
@@ -104,7 +111,8 @@ class LiveCloudSpec:
     on_final: Callable[[str, int, str | None], None]
     # on_error(message): provider chết — LiveSession fallback local.
     on_error: Callable[[str], None]
-    connect: Callable[[], _Transport] = _connect_real
+    # connect(api_key): mở WS đã xác thực (key đi trong header, không trong start).
+    connect: Callable[[str], _Transport] = _connect_real
 
 
 @dataclass
@@ -140,16 +148,15 @@ class SonioxLive:
         if key is None:
             raise CloudError("thiếu SONIOX_API_KEY")
         try:
-            self._ws = self.spec.connect()
-            self._ws.send(json.dumps(self._config(key)))
+            self._ws = self.spec.connect(key)
+            self._ws.send(json.dumps(self._config()))
         except Exception as exc:  # noqa: BLE001
             raise CloudError(f"không mở được kết nối Soniox: {exc}") from exc
         self._tx.start()
         self._rx.start()
 
-    def _config(self, key: str) -> dict:
+    def _config(self) -> dict:
         cfg: dict = {
-            "api_key": key,
             "model": RT_MODEL,
             "audio_format": "pcm_s16le",
             "sample_rate": SAMPLE_RATE,
@@ -330,7 +337,7 @@ def _client(client: httpx.Client | None) -> tuple[httpx.Client, bool]:
 def transcribe_file_async(
     path: Path, spec: AsyncJobSpec, client: httpx.Client | None = None
 ) -> str:
-    """Upload WAV → stt-async-v5 → poll → text. LUÔN xóa file + transcription
+    """Upload WAV → stt-async-v6 → poll → text. LUÔN xóa file + transcription
     phía Soniox trước khi trả (kể cả khi lỗi) — audio không được nằm lại cloud."""
     key = api_key()
     if key is None:

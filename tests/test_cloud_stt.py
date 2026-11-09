@@ -50,6 +50,7 @@ class FakeWS:
         self.sent: list[str] = []
         self.sent_binary: list[bytes] = []
         self.closed = False
+        self.connect_key: str | None = None  # key SonioxLive đưa cho connect()
 
     def send(self, data: str):
         self.sent.append(data)
@@ -84,13 +85,18 @@ def run_live(monkeypatch):
         finals: list[tuple[str, int, str | None]] = []
         errors: list[str] = []
         done = threading.Event()
+
+        def connect(key: str):
+            ws.connect_key = key
+            return ws
+
         spec = cloud_stt.LiveCloudSpec(
             language="vi",
             context={"terms": ["Claude"]},
             on_partial=lambda t, s: partials.append((t, s)),
             on_final=lambda t, s, spk: finals.append((t, s, spk)),
             on_error=lambda m: (errors.append(m), done.set()),
-            connect=lambda: ws,
+            connect=connect,
         )
         worker = cloud_stt.SonioxLive(spec)
         worker.start()
@@ -104,10 +110,19 @@ def run_live(monkeypatch):
 def test_config_sent_first_with_context(run_live):
     _, ws, _, _, _ = run_live([])
     cfg = json.loads(ws.sent[0])
-    assert cfg["model"] == cloud_stt.RT_MODEL
+    assert cfg["model"] == cloud_stt.RT_MODEL == "stt-rt-v6"
     assert cfg["language_hints"] == ["vi", "en"]
     assert cfg["context"] == {"terms": ["Claude"]}
     assert cfg["enable_speaker_diarization"] is True
+
+
+def test_api_key_goes_to_connect_not_start_message(run_live):
+    # Soniox deprecate `api_key` trong start (từ chối từ 2027-01-15) — key phải
+    # tới transport lúc connect (header Bearer) và KHÔNG lọt ra message start.
+    _, ws, _, _, _ = run_live([])
+    assert ws.connect_key == "test-key"
+    assert "api_key" not in json.loads(ws.sent[0])
+    assert all("test-key" not in s for s in ws.sent if isinstance(s, str))
 
 
 def test_utterances_split_on_gap_and_speaker_kept(run_live):
