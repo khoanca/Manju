@@ -8,6 +8,7 @@ Connection mở-đóng theo từng thao tác — traffic thấp, an toàn thread
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -15,7 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+# MANJU_DATA_DIR: Docker/enterprise mount volume (FR-11); mặc định ./data như cũ.
+DATA = Path(os.environ.get("MANJU_DATA_DIR") or ROOT / "data")
 DB_PATH = DATA / "manju.db"
 DEFAULT_RECORDINGS = DATA / "recordings"
 
@@ -97,6 +99,30 @@ CREATE TABLE IF NOT EXISTS corrections (
   updated_at TEXT NOT NULL,
   UNIQUE(wrong, right)
 );
+
+-- FR-11 Enterprise: multi-user (SĐT + mật khẩu). Edition local không dùng.
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  phone         TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  password_hash TEXT NOT NULL,           -- scrypt$salt_hex$hash_hex
+  role          TEXT NOT NULL DEFAULT 'member',  -- member|admin
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending|active|blocked
+  created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token      TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  token_hash TEXT NOT NULL UNIQUE,       -- sha256 của token; token chỉ hiện 1 lần
+  label      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -131,6 +157,10 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         # Segment ASR thô của phiên live (text + avg_logprob) — để reanalyze chạy
         # lại đúng cái live đã nghe, không phải batch-decode lại (khác live).
         conn.execute("ALTER TABLE transcripts ADD COLUMN raw_segments TEXT")
+    if "owner_id" not in cols:
+        # FR-11: chủ bản ghi (users.id). NULL = bản của edition local / trước migration.
+        conn.execute("ALTER TABLE transcripts ADD COLUMN owner_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_t_owner ON transcripts(owner_id)")
     spk_cols = {r["name"] for r in conn.execute("PRAGMA table_info(speakers)")}
     if "region" not in spk_cols:
         conn.execute("ALTER TABLE speakers ADD COLUMN region TEXT")
@@ -156,6 +186,7 @@ class TranscriptRecord:
     speaker_map: dict | None = None  # {local_cluster_idx: speaker_id | null} (lớp speaker)
     domain: str | None = None  # Lớp B: ngành nghề dự đoán từ nội dung
     raw_segments: list[dict] | None = None  # ASR thô live [{text, no_speech_prob, avg_logprob}]
+    owner_id: str | None = None  # FR-11: users.id của người tạo (enterprise)
 
 
 def insert_transcript(rec: TranscriptRecord) -> None:
@@ -164,8 +195,8 @@ def insert_transcript(rec: TranscriptRecord) -> None:
             """INSERT OR REPLACE INTO transcripts
                (id, title, language, model, duration, created_at, text, raw_text,
                 segments, chars, words, corrected, llm_model, audio_file, audio_dir,
-                speaker_map, domain, raw_segments)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                speaker_map, domain, raw_segments, owner_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 rec.transcript_id, rec.title, rec.language, rec.model,
                 round(rec.duration, 1), rec.created_at, rec.text, rec.raw_text,
@@ -175,6 +206,7 @@ def insert_transcript(rec: TranscriptRecord) -> None:
                 json.dumps(rec.speaker_map, ensure_ascii=False) if rec.speaker_map else None,
                 rec.domain,
                 json.dumps(rec.raw_segments, ensure_ascii=False) if rec.raw_segments else None,
+                rec.owner_id,
             ),
         )
 
@@ -196,20 +228,43 @@ def _meta(row: sqlite3.Row) -> dict:
         "audio": row["audio_file"],
         "golden": bool(row["golden"]),
         "domain": row["domain"],
+        "owner_id": row["owner_id"],
     }
 
 
-def list_transcripts() -> list[dict]:
+def list_transcripts(owner_id: str | None = None, q: str | None = None) -> list[dict]:
+    """owner_id: FR-11 scope theo chủ bản ghi (None = tất cả — edition local/admin).
+    q: tìm trong title + text (LIKE, không phân biệt hoa thường)."""
+    where, params = [], []
+    if owner_id is not None:
+        where.append("t.owner_id = ?")
+        params.append(owner_id)
+    if q:
+        where.append("(t.title LIKE ? OR t.text LIKE ? OR t.edited_text LIKE ?)")
+        params += [f"%{q}%"] * 3
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
     with _connect() as conn:
         rows = conn.execute(
-            """SELECT t.id, t.title, t.language, t.model, t.duration, t.created_at,
+            f"""SELECT t.id, t.title, t.language, t.model, t.duration, t.created_at,
                       t.chars, t.words, t.corrected, t.llm_model, t.segments,
-                      t.audio_file, t.golden, t.domain, s.status AS sync_status
+                      t.audio_file, t.golden, t.domain, t.owner_id,
+                      s.status AS sync_status
                FROM transcripts t
                LEFT JOIN sync_state s ON s.transcript_id = t.id
-               ORDER BY t.created_at DESC"""
+               {clause}
+               ORDER BY t.created_at DESC""",
+            params,
         ).fetchall()
     return [{**_meta(r), "sync": r["sync_status"]} for r in rows]
+
+
+def transcript_owner(transcript_id: str) -> str | None:
+    """owner_id của bản ghi (None nếu không có chủ hoặc không tồn tại)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM transcripts WHERE id = ?", (transcript_id,)
+        ).fetchone()
+    return row["owner_id"] if row is not None else None
 
 
 def read_transcript(transcript_id: str) -> dict | None:
@@ -720,3 +775,140 @@ def migrate_from_files(transcripts_dir: Path, recordings_dir: Path) -> int:
             )
             added += cur.rowcount
     return added
+
+
+# ── FR-11 Enterprise: users / sessions / api tokens ───────────────────────
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def count_users() -> int:
+    with _connect() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+
+def create_user(phone: str, name: str, password_hash: str, *, role: str, status: str) -> dict:
+    uid = f"u-{uuid.uuid4().hex[:12]}"
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO users (id, phone, name, password_hash, role, status, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (uid, phone, name, password_hash, role, status, _now()),
+        )
+    user = get_user(uid)
+    assert user is not None
+    return user
+
+
+def _user_row(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "id": row["id"], "phone": row["phone"], "name": row["name"],
+        "role": row["role"], "status": row["status"], "created_at": row["created_at"],
+    }
+
+
+def get_user(user_id: str) -> dict | None:
+    with _connect() as conn:
+        return _user_row(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+
+
+def get_user_auth(phone: str) -> tuple[dict, str] | None:
+    """(user, password_hash) theo SĐT — chỉ auth.py dùng."""
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE phone = ?", (phone,)).fetchone()
+    user = _user_row(row)
+    return (user, row["password_hash"]) if user is not None and row is not None else None
+
+
+def list_users() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
+    return [u for u in (_user_row(r) for r in rows) if u is not None]
+
+
+def update_user(user_id: str, *, role: str | None = None, status: str | None = None) -> dict | None:
+    sets, params = [], []
+    if role is not None:
+        sets.append("role = ?")
+        params.append(role)
+    if status is not None:
+        sets.append("status = ?")
+        params.append(status)
+    if sets:
+        with _connect() as conn:
+            conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", [*params, user_id])
+    return get_user(user_id)
+
+
+def count_active_admins() -> int:
+    with _connect() as conn:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'"
+        ).fetchone()[0])
+
+
+def create_session(user_id: str, token: str, expires_at: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
+            (token, user_id, _now(), expires_at),
+        )
+
+
+def session_user(token: str) -> dict | None:
+    """User của session còn hạn; session hết hạn bị xoá luôn."""
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT u.*, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id
+               WHERE s.token = ?""",
+            (token,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["expires_at"] <= _now():
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            return None
+    return _user_row(row)
+
+
+def delete_session(token: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+
+
+def create_api_token(user_id: str, token_hash: str, label: str) -> dict:
+    tid = f"tok-{uuid.uuid4().hex[:12]}"
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO api_tokens (id, user_id, token_hash, label, created_at) VALUES (?,?,?,?,?)",
+            (tid, user_id, token_hash, label, _now()),
+        )
+    return {"id": tid, "label": label, "created_at": _now()}
+
+
+def api_token_user(token_hash: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT u.* FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    return _user_row(row)
+
+
+def list_api_tokens(user_id: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, label, created_at FROM api_tokens WHERE user_id = ? ORDER BY created_at",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_api_token(user_id: str, token_id: str) -> bool:
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
+        )
+        return cur.rowcount > 0

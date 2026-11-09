@@ -156,18 +156,8 @@ class SonioxLive:
         self._rx.start()
 
     def _config(self) -> dict:
-        cfg: dict = {
-            "model": RT_MODEL,
-            "audio_format": "pcm_s16le",
-            "sample_rate": SAMPLE_RATE,
-            "num_channels": 1,
-            "language_hints": language_hints(self.spec.language),
-            "enable_speaker_diarization": True,
-            "enable_endpoint_detection": True,
-        }
-        if self.spec.context:
-            cfg["context"] = self.spec.context
-        return cfg
+        return rt_config(self.spec.language, self.spec.context)
+
 
     def feed(self, data: bytes) -> None:
         if not self._failed:
@@ -318,6 +308,55 @@ class SonioxLive:
             pass
 
 
+def rt_config(language: str, context: dict | None) -> dict:
+    """Message start cho WS realtime — dùng chung server (SonioxLive) và
+    browser direct (FR-11, server trả về qua /api/cloud/session)."""
+    cfg: dict = {
+        "model": RT_MODEL,
+        "audio_format": "pcm_s16le",
+        "sample_rate": SAMPLE_RATE,
+        "num_channels": 1,
+        "language_hints": language_hints(language),
+        "enable_speaker_diarization": True,
+        "enable_endpoint_detection": True,
+    }
+    if context:
+        cfg["context"] = context
+    return cfg
+
+
+TEMP_KEY_TTL_S = 3600
+
+
+def create_temporary_key(
+    client_reference_id: str, client: httpx.Client | None = None, ttl_s: int = TEMP_KEY_TTL_S
+) -> dict:
+    """FR-11: xin temp key (usage_type transcribe_websocket) cho browser nối thẳng
+    Soniox — key thật không rời server. Trả {api_key, expires_at}."""
+    key = api_key()
+    if key is None:
+        raise CloudError("thiếu SONIOX_API_KEY")
+    http, own = _client(client)
+    try:
+        r = http.post(
+            "/auth/temporary-api-key",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "usage_type": "transcribe_websocket",
+                "expires_in_seconds": ttl_s,
+                "client_reference_id": client_reference_id[:64],
+            },
+        )
+        r.raise_for_status()
+        body = r.json()
+        return {"api_key": body["api_key"], "expires_at": body.get("expires_at")}
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise CloudError(f"không xin được temp key Soniox: {exc}") from exc
+    finally:
+        if own:
+            http.close()
+
+
 # ── Async (re-listen sau Stop + upload online) ─────────────────────────────
 
 
@@ -339,6 +378,15 @@ def transcribe_file_async(
 ) -> str:
     """Upload WAV → stt-async-v6 → poll → text. LUÔN xóa file + transcription
     phía Soniox trước khi trả (kể cả khi lỗi) — audio không được nằm lại cloud."""
+    with path.open("rb") as f:
+        return transcribe_bytes_async(f, path.name, spec, client)
+
+
+def transcribe_bytes_async(
+    data: Any, filename: str, spec: AsyncJobSpec, client: httpx.Client | None = None
+) -> str:
+    """Như transcribe_file_async nhưng nhận bytes/file-like trong RAM — FR-11
+    upload enterprise không ghi audio ra đĩa server (US-904)."""
     key = api_key()
     if key is None:
         raise CloudError("thiếu SONIOX_API_KEY")
@@ -346,9 +394,8 @@ def transcribe_file_async(
     headers = {"Authorization": f"Bearer {key}"}
     file_id = tid = None
     try:
-        with path.open("rb") as f:
-            up = http.post("/files", headers=headers,
-                           files={"file": (path.name, f, "audio/wav")})
+        up = http.post("/files", headers=headers,
+                       files={"file": (filename, data, "application/octet-stream")})
         up.raise_for_status()
         file_id = up.json()["id"]
         job: dict = {"file_id": file_id, "model": ASYNC_MODEL,

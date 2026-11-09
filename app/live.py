@@ -814,7 +814,9 @@ async def _finish(ws: WebSocket, session: LiveSession | None, finish: bool) -> N
             pass
 
 
-async def handle(ws: WebSocket) -> None:
+async def handle(ws: WebSocket, user: dict | None = None, direct_only: bool = False) -> None:
+    """user/direct_only: FR-11 enterprise — bản ghi gắn owner, và chỉ nhận phiên
+    `mode:"direct"` (browser tự stream Soniox, server không nhận PCM)."""
     await ws.accept()
     session: LiveSession | None = None
     finish = False  # stop chủ động → chốt & lưu ngay; rớt WS → park chờ resume
@@ -826,6 +828,16 @@ async def handle(ws: WebSocket) -> None:
                 break
             if msg.get("text"):
                 data = json.loads(msg["text"])
+                if session is None and (
+                    data.get("mode") == "direct" or (direct_only and data.get("type") == "resume")
+                ):
+                    from app import live_direct  # lazy: tránh import vòng
+
+                    await live_direct.handle(ws, data, user)
+                    return
+                if direct_only:
+                    await _reject(ws, "Bản enterprise chỉ hỗ trợ ghi âm trực tiếp qua Soniox (mode direct).")
+                    return
                 if data.get("type") == "start" and session is None:
                     session = await _start_session(ws, data)
                     if session is None:

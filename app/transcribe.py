@@ -1,6 +1,7 @@
 """Wrapper faster-whisper + quản lý job transcribe trong background."""
 from __future__ import annotations
 
+import io
 import os
 import re
 import shutil
@@ -16,7 +17,7 @@ from app.correct import correct_text, llm_model_name
 
 # ── Đường dẫn dữ liệu (chung với MCP server) ──────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+DATA = db.DATA  # MANJU_DATA_DIR hoặc ./data — một nguồn, tránh lệch với DB
 UPLOADS = DATA / "uploads"
 TRANSCRIPTS = DATA / "transcripts"
 RECORDINGS = DATA / "recordings"  # file ghi âm gốc (record + upload), giữ để nghe lại
@@ -55,6 +56,7 @@ class TranscriptDraft:
     speaker_map: dict | None = None  # pass 3: {cụm local: speaker_id | null}
     domain: str | None = None  # Lớp B: ngành nghề dự đoán
     raw_segments: list[dict] | None = None  # ASR thô live (reanalyze dùng thay decode lại)
+    owner_id: str | None = None  # FR-11: chủ bản ghi (enterprise)
 
 
 # ── Quản lý job (in-memory) ───────────────────────────────────────────────
@@ -305,6 +307,7 @@ def save_transcript(draft: TranscriptDraft) -> str:
         speaker_map=draft.speaker_map,
         domain=draft.domain,
         raw_segments=draft.raw_segments,
+        owner_id=draft.owner_id,
     ))
     return transcript_id
 
@@ -333,3 +336,46 @@ def transcript_audio_path(transcript_id: str) -> Path | None:
 
 def read_transcript(transcript_id: str) -> dict | None:
     return db.read_transcript(transcript_id)
+
+
+# ── FR-11 Enterprise: upload trong RAM → Soniox async, không ghi đĩa (US-904) ─
+def _process_cloud_bytes(job_id: str, data: bytes, spec: JobSpec, owner_id: str | None) -> None:
+    _update(job_id, status="running", progress=0.1)
+    glossary = corrections.build_bias(spec.prompt)
+    context = cloud_stt.build_context(glossary, corrections.top_pairs(200))
+    text = cloud_stt.transcribe_bytes_async(
+        io.BytesIO(data), spec.filename, cloud_stt.AsyncJobSpec(language=spec.language, context=context)
+    )
+    if not text:
+        raise cloud_stt.CloudError("transcript async rỗng")
+    _update(job_id, text=text, progress=0.8)
+    full_text = text
+    if spec.correct and db.get_setting("cloud_cleanup", "0") == "1":
+        full_text, _ = _maybe_correct(job_id, text, spec, ())
+    transcript_id = save_transcript(TranscriptDraft(
+        original_name=spec.filename,
+        language=spec.language,
+        duration=0.0,  # không đọc header file (không có đường local) — UI chỉ hiển thị
+        text=full_text,
+        model_name=cloud_stt.ASYNC_MODEL,
+        raw_text=text if full_text != text else None,
+        audio_path=None,
+        owner_id=owner_id,
+    ))
+    _update(job_id, status="done", text=full_text, progress=1.0, transcript_id=transcript_id)
+
+
+def _run_cloud_bytes(job_id: str, data: bytes, spec: JobSpec, owner_id: str | None) -> None:
+    try:
+        _process_cloud_bytes(job_id, data, spec, owner_id)
+    except Exception as exc:  # noqa: BLE001 — không fallback local ở enterprise
+        _update(job_id, status="error", error=str(exc))
+
+
+def start_cloud_bytes(data: bytes, spec: JobSpec, owner_id: str | None) -> str:
+    """Job nền nhận bytes thẳng từ request — audio không bao giờ chạm đĩa server."""
+    job_id = _new_job()
+    threading.Thread(
+        target=_run_cloud_bytes, args=(job_id, data, spec, owner_id), daemon=True
+    ).start()
+    return job_id

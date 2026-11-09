@@ -1,24 +1,28 @@
 """FastAPI app: upload file ghi âm → transcribe → text."""
 from __future__ import annotations
 
+import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Form, HTTPException, Response, UploadFile, WebSocket
+from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import (
+    auth,
     cleanup,
     cloud_stt,
     correct,
     corrections,
     db,
     diarize,
+    edition,
     engines,
     live,
     org,
@@ -46,6 +50,42 @@ STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+# ── FR-11 Enterprise: gate đăng nhập + scope theo chủ bản ghi ──────────────
+_TRANSCRIPT_PATH = re.compile(r"^/api/transcripts/([^/]+)")
+_ADMIN_ONLY = {("PUT", "/api/settings"), ("POST", "/api/lexicon/update"),
+               ("POST", "/api/lexicon/domain-research"), ("POST", "/api/lexicon/slang-trend")}
+
+
+def _scope_owner(request: Request) -> str | None:
+    """owner_id để lọc list: None = thấy tất cả (edition local hoặc admin)."""
+    user = getattr(request.state, "user", None)
+    if not edition.is_enterprise() or user is None or user["role"] == "admin":
+        return None
+    return str(user["id"])
+
+
+@app.middleware("http")
+async def enterprise_gate(request: Request, call_next):
+    request.state.user = None
+    path = request.url.path
+    if not edition.is_enterprise() or not path.startswith("/api/") or path.startswith("/api/auth/"):
+        return await call_next(request)
+    user = auth.user_from(request.cookies, request.headers.get("authorization"))
+    try:
+        user = auth.require_active(user)
+        if (request.method, path) in _ADMIN_ONLY or path.startswith("/api/users"):
+            auth.require_admin(user)
+        m = _TRANSCRIPT_PATH.match(path)
+        if m and user["role"] != "admin":
+            owner = db.transcript_owner(m.group(1))
+            if owner != user["id"]:
+                raise HTTPException(404, "Không tìm thấy transcript")
+    except HTTPException as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    request.state.user = user
+    return await call_next(request)
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
@@ -59,7 +99,19 @@ def sw():
 
 @app.websocket("/ws/live")
 async def ws_live(ws: WebSocket):
-    await live.handle(ws)
+    if not edition.is_enterprise():
+        await live.handle(ws)
+        return
+    # FR-11: cần đăng nhập + active; chỉ nhận phiên direct (server không nhận PCM).
+    user = auth.ws_user(ws)
+    try:
+        user = auth.require_active(user)
+    except HTTPException as exc:
+        await ws.accept()
+        await ws.send_text(json.dumps({"type": "error", "message": exc.detail}))
+        await ws.close()
+        return
+    await live.handle(ws, user=user, direct_only=True)
 
 
 class TranscribeForm(BaseModel):
@@ -74,7 +126,7 @@ class TranscribeForm(BaseModel):
 
 
 @app.post("/api/transcribe")
-async def api_transcribe(form: Annotated[TranscribeForm, Form()]):
+async def api_transcribe(request: Request, form: Annotated[TranscribeForm, Form()]):
     if form.language not in ("vi", "en"):
         raise HTTPException(400, "language phải là 'vi' hoặc 'en'")
     if form.model not in transcribe.ALLOWED_MODELS:
@@ -82,6 +134,16 @@ async def api_transcribe(form: Annotated[TranscribeForm, Form()]):
     data = await form.file.read()
     if not data:
         raise HTTPException(400, "File rỗng")
+    if edition.is_enterprise():
+        # US-904: file chỉ nằm trong RAM → Soniox async; không ghi đĩa, không tier local.
+        if not cloud_stt.available():
+            raise HTTPException(503, "Admin chưa cấu hình SONIOX_API_KEY")
+        user = request.state.user
+        spec = transcribe.JobSpec(
+            filename=form.file.filename or "meeting", language=form.language,
+            prompt=form.prompt.strip(), correct=form.correct, engine="cloud",
+        )
+        return {"job_id": transcribe.start_cloud_bytes(data, spec, user["id"] if user else None)}
     spec = transcribe.JobSpec(
         filename=form.file.filename or "meeting",
         language=form.language,
@@ -180,11 +242,17 @@ def _lexicon_settings() -> dict:
 
 @app.get("/api/settings")
 def api_settings():
-    info = engines.get_engine().info
+    if edition.is_enterprise():
+        # Không chạm EngineRegistry (không nạp Whisper) — chỉ Soniox.
+        engine_info = {"tier": "cloud", "model": cloud_stt.RT_MODEL}
+    else:
+        info = engines.get_engine().info
+        engine_info = {"tier": info.tier, "model": info.model_name}
     return {
+        "edition": edition.edition(),
         "audio_dir": str(db.get_audio_dir()),
         "glossary": db.get_setting("glossary", "") or "",
-        "engine": {"tier": info.tier, "model": info.model_name},
+        "engine": engine_info,
         "max_live_sessions": live.MAX_LIVE_SESSIONS,
         "diarize": {
             "enabled": transcribe.diarize_enabled(),
@@ -270,8 +338,10 @@ def api_settings_put(body: SettingsIn):
 
 
 @app.get("/api/transcripts")
-def api_transcripts():
-    return transcribe.list_transcripts()
+def api_transcripts(request: Request, q: str | None = None):
+    """q: tìm trong tiêu đề/nội dung (US-905 MCP search). Enterprise: member chỉ
+    thấy bản của mình (middleware đã gắn request.state.user)."""
+    return db.list_transcripts(owner_id=_scope_owner(request), q=(q or "").strip() or None)
 
 
 @app.get("/api/transcripts/{transcript_id}")
@@ -702,3 +772,128 @@ def api_push(transcript_id: str, body: PushIn):
 @app.get("/api/transcripts/{transcript_id}/sync")
 def api_sync_state(transcript_id: str):
     return db.get_sync_state(transcript_id) or {"status": "pending"}
+
+
+# ── FR-11 Enterprise: auth, user admin, API token, temp key Soniox ─────────
+class RegisterIn(BaseModel):
+    phone: str
+    name: str
+    password: str
+
+
+class LoginIn(BaseModel):
+    phone: str
+    password: str
+
+
+class UserPatchIn(BaseModel):
+    role: str | None = None
+    status: str | None = None
+
+
+class TokenIn(BaseModel):
+    label: str = ""
+
+
+class CloudSessionIn(BaseModel):
+    language: str = "vi"
+    glossary: str = ""
+
+
+def _require_enterprise() -> None:
+    if not edition.is_enterprise():
+        raise HTTPException(404, "Chỉ có ở bản enterprise")
+
+
+def _is_secure(request: Request) -> bool:
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+
+
+@app.post("/api/auth/register")
+def api_register(body: RegisterIn, request: Request, response: Response):
+    _require_enterprise()
+    user = auth.register(body.phone, body.name, body.password)
+    # Người đầu (admin) vào thẳng; member pending cũng được giữ session để UI
+    # hiện "chờ duyệt" — API khác vẫn bị middleware chặn 403.
+    auth.start_session(response, user, secure=_is_secure(request))
+    return user
+
+
+@app.post("/api/auth/login")
+def api_login(body: LoginIn, request: Request, response: Response):
+    _require_enterprise()
+    user = auth.login(body.phone, body.password)
+    auth.start_session(response, user, secure=_is_secure(request))
+    return user
+
+
+@app.post("/api/auth/logout")
+def api_logout(request: Request, response: Response):
+    _require_enterprise()
+    auth.end_session(request, response)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def api_me(request: Request):
+    _require_enterprise()
+    user = auth.user_from(request.cookies, request.headers.get("authorization"))
+    if user is None:
+        raise HTTPException(401, "Chưa đăng nhập")
+    return user
+
+
+@app.get("/api/auth/tokens")
+def api_tokens(request: Request):
+    _require_enterprise()
+    return db.list_api_tokens(request.state.user["id"])
+
+
+@app.post("/api/auth/tokens")
+def api_token_create(body: TokenIn, request: Request):
+    _require_enterprise()
+    return auth.issue_api_token(request.state.user, body.label)
+
+
+@app.delete("/api/auth/tokens/{token_id}")
+def api_token_delete(token_id: str, request: Request):
+    _require_enterprise()
+    if not db.delete_api_token(request.state.user["id"], token_id):
+        raise HTTPException(404, "Không có token")
+    return {"ok": True}
+
+
+@app.get("/api/users")
+def api_users(request: Request):
+    _require_enterprise()
+    return db.list_users()
+
+
+@app.patch("/api/users/{user_id}")
+def api_user_patch(user_id: str, body: UserPatchIn, request: Request):
+    _require_enterprise()
+    return auth.admin_update_user(request.state.user, user_id, role=body.role, status=body.status)
+
+
+@app.post("/api/cloud/session")
+def api_cloud_session(body: CloudSessionIn, request: Request):
+    """US-903: temp key Soniox + config start cho browser nối thẳng. Key thật
+    chỉ nằm trên server. Glossary công ty + cặp sửa đã duyệt → context.terms."""
+    _require_enterprise()
+    if not cloud_stt.available():
+        raise HTTPException(503, "Admin chưa cấu hình SONIOX_API_KEY")
+    user = request.state.user
+    try:
+        key = cloud_stt.create_temporary_key(f"manju:{user['id']}" if user else "manju")
+    except cloud_stt.CloudError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    glossary = corrections.build_bias(
+        "\n".join(x for x in (db.get_setting("glossary", "") or "", body.glossary) if x)
+    )
+    language = "en" if body.language == "en" else "vi"
+    context = cloud_stt.build_context(glossary, corrections.top_pairs(200))
+    return {
+        **key,
+        "ws_url": cloud_stt.RT_URL,
+        "config": cloud_stt.rt_config(language, context),
+    }

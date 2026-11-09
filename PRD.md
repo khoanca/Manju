@@ -104,6 +104,16 @@ Hệ thống theo mô hình **lưu local — xử lý hybrid (online-first) + or
 - UX chế độ (chốt 2026-07-29): **chọn Online/Offline per-PHIÊN ở start card** (không phải cổng chặn khi vào site — người xem lịch sử không bị hỏi). Option Online kèm hint: chính xác thuật ngữ hơn + tách người nói, dịch vụ trả phí (~$0.12–0.22/h), audio stream tới provider để nhận dạng (không lưu ở đó); Offline: chạy hoàn toàn trên máy. Nhớ lựa chọn lần trước; mặc định online khi có key + mạng; upload chọn tương tự. Đang ghi online mà rớt mạng → phiên TỰ rơi về mlx không đứt (never-fail); badge engine đang dùng (FR-1). Client gửi `mode` trong message `start` của WS. Lưu ý tài nguyên: phiên online không chiếm `_decode_lock` → chỉ phiên offline tính vào giới hạn decode đồng thời.
 - AC/task chi tiết: `/plan-feature` khi bắt đầu build.
 
+### FR-11 — Manju Enterprise: bản tách riêng, công ty tự host (net-new 2026-11-09)
+Edition `MANJU_EDITION=enterprise` (code local giữ, không chạy). Một server phục vụ cả công ty; audio ở lại máy nhân viên (OPFS), server chỉ giữ text. Plan: `docs/plan-enterprise.md`.
+- **US-901** Nhân viên đăng ký SĐT + mật khẩu (không OTP); người đầu tiên = admin; người sau `pending` tới khi admin duyệt. Member chỉ thấy bản ghi của mình; admin thấy tất cả.
+- **US-902** Admin quản lý user: duyệt, khoá, đổi role. Admin cuối cùng không tự hạ/khoá mình.
+- **US-903** Live: server cấp Soniox temporary API key (key thật không rời server); browser stream PCM thẳng Soniox `stt-rt-v6`, gom utterance tại client, gửi text từng câu lên server qua WS; Stop → lưu transcript (owner = user), không có file audio phía server. Không có đường offline.
+- **US-904** Upload: file đi qua server **trong RAM** (không ghi đĩa) → Soniox async v6 → text. Lỗi provider → báo lỗi, không fallback local. Ghi rõ trong docs privacy.
+- **US-905** MCP cá nhân: nhân viên tạo API token trong Settings; MCP client stdio (`mcp_server/enterprise.py`) gọi HTTP API bằng token → `list/read/search_transcripts` theo quyền của chính họ.
+- **US-906** Deploy 1 Docker image, volume `/data`; glossary công ty do admin sửa, dùng chung; settings local (engine, audio dir, Ollama, denoise, diarize) ẩn.
+- Ngoài phạm vi đợt này: nối messup/schema 9 bảng, vector search (search = LIKE/FTS), OTP/SSO, nhận giọng tự động.
+
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).
 - Sync audio lên org.
