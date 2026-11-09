@@ -249,4 +249,90 @@ function stopLiveDirect(){
   showScreen("home");
 }
 
+// ── FR-12: gửi transcript lên Messup Enterprise (kho chung chat + họp) ─────
+// Chỉ văn bản theo đoạn. Người dùng liên kết tài khoản Messup một lần; project
+// để trống được — admin Messup sẽ xếp sau ở trang Hội thoại.
+const mkEl = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
+async function messupJson(path, init){
+  const r = await fetch(path, init && { method: init.method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(init.body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || ("Lỗi " + r.status));
+  return data;
+}
+function messupLinkForm(note, again){
+  note.textContent = "Liên kết tài khoản Messup của bạn một lần để gửi cuộc họp vào kho chung của công ty. Mật khẩu không được lưu ở Manju.";
+  const login = mkEl("input", { placeholder: "Tài khoản Messup", autocomplete: "off" });
+  const pass = mkEl("input", { type: "password", placeholder: "Mật khẩu Messup", autocomplete: "off" });
+  const btn = mkEl("button", { className: "mini pri", textContent: "Liên kết" });
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try{ await messupJson("/api/messup/link", { method: "POST", body: { login: login.value, password: pass.value } }); again(); }
+    catch(e){ note.textContent = e.message; note.className = "var-note warn"; btn.disabled = false; }
+  };
+  return mkEl("div", { className: "var-controls" }, mkEl("label", {}, "Tài khoản", login), mkEl("label", {}, "Mật khẩu", pass), btn);
+}
+// Một dòng chọn người cho một nhãn Speaker; trả hàm đọc lựa chọn hiện tại.
+function messupSpeakerPick(label, people, prev, rows){
+  const sel = mkEl("select", {}, mkEl("option", { value: "", textContent: "Chưa gán" }),
+    ...people.map(p => mkEl("option", { value: p.id, textContent: p.title ? `${p.name} · ${p.title}` : p.name, selected: p.id === prev.personId })),
+    mkEl("option", { value: "new", textContent: "+ Người mới…" }));
+  let newName = "";
+  const setNew = (name) => {
+    newName = name;
+    const old = sel.querySelector("option[value=named]"); if (old) old.remove();
+    sel.insertBefore(mkEl("option", { value: "named", textContent: name, selected: true }), sel.lastChild);
+  };
+  if (prev.newName) setNew(prev.newName);
+  sel.onchange = () => {
+    if (sel.value !== "new") return;
+    const name = (prompt(`Tên người nói "${label}":`, "") || "").trim();
+    if (name) setNew(name); else sel.value = "";
+  };
+  rows.append(mkEl("label", {}, label, sel));
+  return () => (sel.value === "named" ? { label, newName } : { label, personId: Number(sel.value) || undefined });
+}
+async function loadMessupPanel(tid){
+  const panel = document.getElementById("messupPanel"), note = document.getElementById("messupNote"), body = document.getElementById("messupBody");
+  panel.classList.add("hidden");
+  if (EDITION !== "enterprise" || !tid) return;
+  let st;
+  try{ st = await messupJson("/api/messup/status"); }catch{ return; }
+  if (!st.configured) return;
+  panel.classList.remove("hidden"); body.innerHTML = ""; note.className = "var-note";
+  const again = () => loadMessupPanel(tid);
+  if (!st.linked){ body.append(messupLinkForm(note, again)); return; }
+  const unlink = mkEl("button", { className: "mini", textContent: "Huỷ liên kết" });
+  unlink.onclick = async () => { if (!confirm("Huỷ liên kết tài khoản Messup trên Manju?")) return; await fetch("/api/messup/link", { method: "DELETE" }); again(); };
+  let info, projects, people;
+  try{
+    [info, projects, people] = await Promise.all([messupJson(`/api/transcripts/${tid}/messup`), messupJson("/api/messup/projects"), messupJson("/api/messup/people")]);
+  }catch(e){ note.textContent = e.message; note.className = "var-note warn"; body.append(unlink); return; }
+  const sync = info.sync, saved = (sync && sync.request) || {};
+  if (sync && sync.status === "sent"){
+    note.className = "var-note " + (sync.duplicate_of ? "warn" : "ok");
+    note.textContent = sync.duplicate_of
+      ? "Cuộc họp này đã có người gửi trước. Bản của bạn vẫn được lưu làm bản ghi phụ; tìm kiếm và tóm tắt dùng bản chính."
+      : "Đã gửi lên Messup" + (saved.project_id ? "." : " — chưa chọn project, admin sẽ xếp vào project sau.");
+    return;
+  }
+  if (sync && sync.status === "failed"){ note.className = "var-note warn"; note.textContent = "Chưa gửi được vì mất kết nối tới Messup. Hệ thống sẽ tự gửi lại; bạn cũng có thể bấm gửi lại ngay."; }
+  else if (sync && sync.status === "rejected"){ note.className = "var-note warn"; note.textContent = `Messup từ chối: ${sync.error || "không rõ lý do"}. Sửa rồi gửi lại.`; }
+  else note.textContent = `Đang liên kết với tài khoản ${st.name || st.login}. Chỉ văn bản được gửi, audio ở lại máy bạn.`;
+
+  const project = mkEl("select", {}, mkEl("option", { value: "", textContent: "Chưa chọn — admin xếp sau" }),
+    ...projects.map(p => mkEl("option", { value: p.id, textContent: p.name, selected: p.id === saved.project_id })));
+  const rows = mkEl("div", { className: "var-controls" }, mkEl("label", {}, "Project", project));
+  const picks = info.labels.map(label => messupSpeakerPick(label, people, (saved.speakers || []).find(x => x.label === label) || {}, rows));
+  const send = mkEl("button", { className: "mini pri", textContent: sync ? "Gửi lại" : "Gửi lên Messup" });
+  send.onclick = async () => {
+    send.disabled = true; send.textContent = "Đang gửi…";
+    const speakers = picks.map(f => f()).filter(x => x.personId || x.newName);
+    // Lỗi từ chối đã được server lưu kèm lý do; again() đọc lại và hiển thị.
+    try{ await messupJson(`/api/transcripts/${tid}/messup`, { method: "POST", body: { projectId: project.value ? Number(project.value) : null, speakers } }); }
+    catch(e){ console.warn("messup:", e.message); }
+    again();
+  };
+  body.append(rows, mkEl("div", { style: "display:flex;gap:8px;margin-top:12px" }, send, unlink));
+}
+
 document.addEventListener("DOMContentLoaded", () => { wireAuthGate(); wireEnterpriseSettings(); });

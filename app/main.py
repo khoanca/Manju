@@ -1,6 +1,7 @@
 """FastAPI app: upload file ghi âm → transcribe → text."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -25,6 +26,8 @@ from app import (
     edition,
     engines,
     live,
+    messup,
+    messup_api,
     org,
     reanalyze,
     slang_trend,
@@ -40,10 +43,32 @@ async def lifespan(_: FastAPI):
     db.init()
     # Đưa transcript dạng file (trước khi có SQLite) vào DB — idempotent.
     db.migrate_from_files(transcribe.TRANSCRIPTS, transcribe.RECORDINGS)
+    retry = asyncio.create_task(_messup_retry_loop()) if _messup_enabled() else None
     yield
+    if retry is not None:
+        retry.cancel()
+
+
+MESSUP_RETRY_INTERVAL_S = 300
+
+
+def _messup_enabled() -> bool:
+    return edition.is_enterprise() and messup.configured()
+
+
+async def _messup_retry_loop() -> None:
+    """FR-12: gửi lại các transcript chưa tới được Messup vì lỗi mạng."""
+    while True:
+        await asyncio.sleep(MESSUP_RETRY_INTERVAL_S)
+        try:
+            await asyncio.to_thread(messup.retry_failed)
+        except Exception:
+            logger.exception("messup retry failed")
 
 
 app = FastAPI(title="Meeting Transcriber", lifespan=lifespan)
+
+app.include_router(messup_api.router)
 
 STATIC = Path(__file__).resolve().parent / "static"
 # AudioWorklet phải fetch module JS qua URL → cần serve cả thư mục static.

@@ -123,6 +123,27 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   label      TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
+
+-- FR-12: liên kết user Manju ↔ tài khoản Messup Enterprise, và trạng thái gửi
+-- từng transcript sang đó. Token do Messup cấp, thu hồi được bên Messup.
+CREATE TABLE IF NOT EXISTS messup_links (
+  user_id   TEXT PRIMARY KEY REFERENCES users(id),
+  token     TEXT NOT NULL,
+  login     TEXT NOT NULL,
+  name      TEXT NOT NULL DEFAULT '',
+  linked_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messup_sync (
+  transcript_id TEXT PRIMARY KEY REFERENCES transcripts(id),
+  user_id      TEXT NOT NULL,
+  status       TEXT NOT NULL,            -- sent|failed (tự gửi lại)|rejected
+  source_id    INTEGER,                  -- sources.id bên Messup
+  duplicate_of INTEGER,                  -- bản chính bên Messup nếu đây là bản ghi phụ
+  request      TEXT NOT NULL,            -- JSON {project_id, name, speakers} để gửi lại
+  error        TEXT,
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  updated_at   TEXT NOT NULL
+);
 """
 
 
@@ -912,3 +933,69 @@ def delete_api_token(user_id: str, token_id: str) -> bool:
             "DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
         )
         return cur.rowcount > 0
+
+
+# ── FR-12: Messup Enterprise ───────────────────────────────────────────────
+def get_messup_link(user_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM messup_links WHERE user_id = ?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_messup_link(user_id: str, token: str, login: str, name: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO messup_links (user_id, token, login, name, linked_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET token = excluded.token,
+                 login = excluded.login, name = excluded.name, linked_at = excluded.linked_at""",
+            (user_id, token, login, name, _now()),
+        )
+
+
+def delete_messup_link(user_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM messup_links WHERE user_id = ?", (user_id,))
+
+
+def _messup_sync_row(row: sqlite3.Row) -> dict:
+    data = dict(row)
+    data["request"] = json.loads(data["request"])
+    return data
+
+
+def get_messup_sync(transcript_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM messup_sync WHERE transcript_id = ?", (transcript_id,)
+        ).fetchone()
+    return _messup_sync_row(row) if row else None
+
+
+def record_messup_attempt(
+    transcript_id: str, user_id: str, request: dict, *, status: str,
+    source_id: int | None = None, duplicate_of: int | None = None, error: str | None = None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO messup_sync
+                 (transcript_id, user_id, status, source_id, duplicate_of, request, error,
+                  attempts, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+               ON CONFLICT(transcript_id) DO UPDATE SET
+                 user_id = excluded.user_id, status = excluded.status,
+                 source_id = excluded.source_id, duplicate_of = excluded.duplicate_of,
+                 request = excluded.request, error = excluded.error,
+                 attempts = messup_sync.attempts + 1, updated_at = excluded.updated_at""",
+            (transcript_id, user_id, status, source_id, duplicate_of,
+             json.dumps(request, ensure_ascii=False), error, _now()),
+        )
+
+
+def failed_messup_syncs(max_attempts: int) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messup_sync WHERE status = 'failed' AND attempts < ? ORDER BY updated_at",
+            (max_attempts,),
+        ).fetchall()
+    return [_messup_sync_row(r) for r in rows]

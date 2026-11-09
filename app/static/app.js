@@ -602,6 +602,7 @@ function setResult(text, raw, segments, id, hasServerAudio, speakerMap, edited){
   applyView();
   renderSegments(segments);
   showAudio(id, hasServerAudio);
+  if (typeof loadMessupPanel === "function") loadMessupPanel(id);   // FR-12 (enterprise.js)
 }
 async function openDetail(m){
   showScreen("detail");

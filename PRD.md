@@ -112,7 +112,16 @@ Edition `MANJU_EDITION=enterprise` (code local giữ, không chạy). Một serv
 - **US-904** Upload: file đi qua server **trong RAM** (không ghi đĩa) → Soniox async v6 → text. Lỗi provider → báo lỗi, không fallback local. Ghi rõ trong docs privacy.
 - **US-905** MCP cá nhân: nhân viên tạo API token trong Settings; MCP client stdio (`mcp_server/enterprise.py`) gọi HTTP API bằng token → `list/read/search_transcripts` theo quyền của chính họ.
 - **US-906** Deploy 1 Docker image, volume `/data`; glossary công ty do admin sửa, dùng chung; settings local (engine, audio dir, Ollama, denoise, diarize) ẩn.
-- Ngoài phạm vi đợt này: nối messup/schema 9 bảng, vector search (search = LIKE/FTS), OTP/SSO, nhận giọng tự động.
+- Ngoài phạm vi đợt này: vector search (search = LIKE/FTS), OTP/SSO, nhận giọng tự động. Nối Messup → FR-12.
+
+### FR-12 — Gửi cuộc họp sang Messup Enterprise (net-new 2026-11-10)
+Kho chung chat + họp của công ty nằm ở Messup Enterprise (repo `messup-enterprise`, hợp đồng `docs/manju-contract.md` ở đó). Manju Enterprise gửi **văn bản theo đoạn** sang đó để LLM truy xuất theo project; không có đường gửi audio. Tắt hẳn khi chưa đặt `MESSUP_URL`.
+- **US-1201** Liên kết tài khoản: mỗi user nhập tài khoản/mật khẩu Messup một lần; Manju chỉ lưu token Messup cấp (bảng `messup_links`), không lưu mật khẩu; huỷ liên kết được.
+- **US-1202** Gửi một bản ghi: nút "Gửi lên Messup" ở trang bản ghi, chỉ chủ bản ghi (hoặc admin) gửi được. Project **tuỳ chọn** — để trống thì admin Messup xếp sau ở trang Hội thoại. Gán từng `Speaker n` vào người trong danh bạ Messup hoặc tạo người mới; không gửi voice embedding (chế độ Soniox không sinh).
+- **US-1203** Không trùng: khoá `audioHash` = băm mã transcript, gửi lại không tạo bản mới. Messup báo `duplicateOf` khi người khác đã gửi cùng cuộc họp → UI báo "đã có người gửi trước, bản của bạn là bản ghi phụ".
+- **US-1204** Hàng chờ: lỗi mạng/5xx → trạng thái `failed`, vòng nền gửi lại mỗi 5 phút (tối đa 10 lần); Messup từ chối (4xx) → `rejected`, hiện lý do để sửa rồi gửi lại.
+- `startedAt` = lúc lưu bản ghi lùi lại bằng thời lượng. Với file upload đây là lúc upload, không phải lúc họp, nên Messup có thể không nhận ra bản trùng của file upload muộn.
+- Luồng Supabase của FR-5 (`app/org.py`) giữ nguyên, không dùng ở enterprise.
 
 ## 3. Ngoài phạm vi
 - Sync 2 chiều / sửa đồng thời (local là nguồn chân lý, push là một chiều).

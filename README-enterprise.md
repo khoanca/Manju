@@ -52,6 +52,7 @@ Env:
 - `SONIOX_API_KEY` — **bắt buộc** (không có → không ghi/upload được; start card báo "admin chưa cấu hình").
 - `MANJU_EDITION=enterprise`, `MANJU_DATA_DIR=/data` — Dockerfile đã set.
 - `OPENROUTER_API_KEY` — tuỳ chọn, cho toggle "AI làm sạch transcript" (mặc định tắt).
+- `MESSUP_URL` — tuỳ chọn, địa chỉ Messup Enterprise của công ty (vd `https://messup.congty.vn`). Có thì trang bản ghi hiện mục "Gửi lên Messup": mỗi người liên kết tài khoản Messup một lần rồi gửi văn bản cuộc họp vào kho chung (FR-12). Trên Fly đặt trong `[env]` của `fly.toml`.
 
 ## Tài khoản
 
