@@ -1,6 +1,6 @@
 # Plan: Manju Enterprise (bản tách riêng, tự host)
 - **Source**: PRD FR-11, US-901..US-906
-- **Status**: Implemented (2026-11-09 — chưa smoke với key Soniox thật/browser thật)
+- **Status**: Implemented + **smoke Soniox thật PASS** 2026-11-09 (Chromium fake-mic WAV espeak vi+en → temp key → wss stt-rt-v6 → 2 utterance có speaker → server lưu text, audio=None; upload WAV → stt-async-v6 → text đúng, 0 file audio trên đĩa server; key thật đi qua proxy-injected credential, không nằm trong env)
 - **Updated**: 2026-11-09
 
 ## Approach
