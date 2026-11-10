@@ -27,9 +27,17 @@ function showAuthGate(mode){
   document.getElementById("authLogin").classList.toggle("hidden", mode !== "login");
   document.getElementById("authRegister").classList.toggle("hidden", mode !== "register");
   document.getElementById("authPending").classList.toggle("hidden", mode !== "pending");
-  document.getElementById("authErr").textContent = "";
+  authError("");
+  g.scrollTop = 0;
 }
 function hideAuthGate(){ document.getElementById("authGate").classList.add("hidden"); }
+// Mỗi form có ô báo lỗi riêng — ô chỉ chiếm chỗ khi có lỗi.
+function authError(msg){
+  for (const id of ["authErr", "regErr"]){
+    const e = document.getElementById(id);
+    e.textContent = msg; e.classList.toggle("hidden", !msg);
+  }
+}
 
 async function authPost(path, body){
   const r = await _rawFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -48,28 +56,39 @@ async function afterAuth(user){
 }
 
 function wireAuthGate(){
-  const err = document.getElementById("authErr");
-  document.getElementById("authLoginBtn").onclick = async () => {
-    err.textContent = "";
-    try{
-      const u = await authPost("/api/auth/login", { phone: document.getElementById("authPhone").value, password: document.getElementById("authPass").value });
-      await afterAuth(u);
-    }catch(e){ err.textContent = e.message; }
+  const val = (id) => document.getElementById(id).value.trim();
+  // Form thật (Enter gửi được, trình quản lý mật khẩu nhận ra); nút khoá lại trong lúc chờ server.
+  const wire = (formId, btnId, busy, run) => {
+    const form = document.getElementById(formId), btn = document.getElementById(btnId), label = btn.textContent;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (btn.disabled) return;
+      authError(""); btn.disabled = true; btn.textContent = busy;
+      try{ await afterAuth(await run()); }
+      catch(err){ authError(err.message); }
+      finally{ btn.disabled = false; btn.textContent = label; }
+    });
   };
-  document.getElementById("authRegBtn").onclick = async () => {
-    err.textContent = "";
-    try{
-      const u = await authPost("/api/auth/register", {
-        phone: document.getElementById("regPhone").value, name: document.getElementById("regName").value,
-        password: document.getElementById("regPass").value,
-      });
-      await afterAuth(u);
-    }catch(e){ err.textContent = e.message; }
-  };
+  wire("authLogin", "authLoginBtn", "Đang đăng nhập…", () => {
+    if (!val("authPhone") || !document.getElementById("authPass").value) throw new Error("Nhập số điện thoại và mật khẩu.");
+    return authPost("/api/auth/login", { phone: val("authPhone"), password: document.getElementById("authPass").value });
+  });
+  wire("authRegister", "authRegBtn", "Đang tạo tài khoản…", () => {
+    if (!val("regName") || !val("regPhone") || !document.getElementById("regPass").value) throw new Error("Điền đủ họ tên, số điện thoại và mật khẩu.");
+    return authPost("/api/auth/register", { phone: val("regPhone"), name: val("regName"), password: document.getElementById("regPass").value });
+  });
   document.getElementById("authToReg").onclick = () => showAuthGate("register");
   document.getElementById("authToLogin").onclick = () => showAuthGate("login");
   document.getElementById("authPendingLogout").onclick = logout;
-  document.getElementById("authPass").addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("authLoginBtn").click(); });
+  document.getElementById("authPendingRetry").onclick = () => location.reload();
+  document.querySelectorAll("[data-eye]").forEach((b) => {
+    b.onclick = () => {
+      const input = document.getElementById(b.dataset.eye), show = input.type === "password";
+      input.type = show ? "text" : "password";
+      b.textContent = show ? "Ẩn" : "Hiện";
+      b.setAttribute("aria-label", show ? "Ẩn mật khẩu" : "Hiện mật khẩu");
+    };
+  });
 }
 async function logout(){
   try{ await _rawFetch("/api/auth/logout", { method: "POST" }); }catch{}
@@ -93,7 +112,8 @@ async function applyEdition(s){
   const glossary = document.getElementById("prompt");
   if (glossary && ME && ME.role !== "admin"){ glossary.readOnly = true; glossary.placeholder = "Glossary công ty — admin chỉnh sửa"; }
   document.getElementById("entSection").classList.remove("hidden");
-  document.getElementById("entUserName").textContent = ME ? `${ME.name} (${ME.phone})` : "";
+  document.getElementById("entUserName").textContent = ME ? ME.name : "";
+  document.getElementById("entUserSub").textContent = ME ? `${ME.phone} · đang đăng nhập` : "";
   document.getElementById("usersSection").classList.toggle("hidden", !(ME && ME.role === "admin"));
   if (ME && ME.role === "admin") loadUsers();
   loadTokens();
@@ -110,8 +130,8 @@ async function loadUsers(){
     const row = document.createElement("div"); row.className = "set-row";
     const main = document.createElement("div"); main.className = "set-main";
     main.innerHTML = `<b></b><small></small>`;
-    main.querySelector("b").textContent = `${u.name} · ${u.phone}`;
-    main.querySelector("small").textContent = `${u.role === "admin" ? "Admin" : "Thành viên"} · ${STATUS_VI[u.status] || u.status}`;
+    main.querySelector("b").textContent = u.name;
+    main.querySelector("small").textContent = `${u.phone} · ${u.role === "admin" ? "Admin" : "Thành viên"} · ${STATUS_VI[u.status] || u.status}`;
     const act = document.createElement("div"); act.style.display = "flex"; act.style.gap = "6px";
     const mk = (label, patch, pri) => {
       const b = document.createElement("button"); b.className = "mini" + (pri ? " pri" : ""); b.textContent = label;
@@ -129,7 +149,7 @@ async function loadUsers(){
     else if (u.id !== (ME && ME.id)) act.appendChild(mk("→ Thành viên", { role: "member" }));
     row.append(main, act); box.appendChild(row);
   }
-  if (!users.length) box.innerHTML = '<small style="color:var(--faint)">Chưa có user.</small>';
+  if (!users.length) box.innerHTML = '<small class="set-empty">Chưa có user.</small>';
 }
 
 // ── API token cho LLM/MCP cá nhân ─────────────────────────────────────────
@@ -147,7 +167,7 @@ async function loadTokens(){
     del.onclick = async () => { if (!confirm("Xoá token này? LLM đang dùng sẽ mất quyền.")) return; await fetch(`/api/auth/tokens/${t.id}`, { method: "DELETE" }); loadTokens(); };
     row.appendChild(del); box.appendChild(row);
   }
-  if (!toks.length) box.innerHTML = '<small style="color:var(--faint)">Chưa có token. Tạo một token rồi dán vào cấu hình MCP của LLM bạn dùng.</small>';
+  if (!toks.length) box.innerHTML = '<small class="set-empty">Chưa có token nào.</small>';
 }
 function wireEnterpriseSettings(){
   document.getElementById("tokenCreate").onclick = async () => {

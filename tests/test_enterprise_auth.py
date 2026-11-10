@@ -52,6 +52,19 @@ def test_unauthenticated_api_401_and_static_open(ent):
     assert ent.get("/").status_code == 200
 
 
+def test_app_shell_is_always_revalidated_so_a_deploy_shows_up(ent):
+    for path in ("/", "/sw.js", "/static/enterprise.js"):
+        assert ent.get(path).headers["cache-control"] == "no-cache", path
+    assert "cache-control" not in ent.get("/api/auth/me").headers
+
+
+def test_login_gate_has_real_forms_and_an_error_slot_per_form(ent):
+    html = ent.get("/").text
+    for needle in ('<form id="authLogin"', '<form id="authRegister"', 'id="authErr"', 'id="regErr"',
+                   'for="authPhone"', 'for="regPass"', 'id="authPendingRetry"'):
+        assert needle in html, needle
+
+
 def test_register_validation_and_duplicate(ent):
     r = ent.post("/api/auth/register", json={"phone": "abc", "name": "X Y", "password": "secret1"})
     assert r.status_code == 400

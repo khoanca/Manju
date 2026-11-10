@@ -64,13 +64,43 @@
   .hidden{ display:none !important; }
   /* FR-11: bản enterprise ẩn các mục chỉ có ý nghĩa khi ASR chạy trên máy */
   body.enterprise .local-only{ display:none !important; }
-  #authGate{ position:fixed; inset:0; z-index:2000; background:var(--bg,#f4f6fb); display:flex; align-items:center; justify-content:center; padding:20px; }
-  #authGate .start-card{ width:min(420px,100%); }
-  #authLogin, #authRegister{ display:flex; flex-direction:column; gap:6px; }
-  #authLogin input, #authRegister input{ width:100%; margin-bottom:8px; font-size:16px; }
-  #authGate .link{ align-self:flex-start; }
-  #authGate .err{ color:var(--bad-fg); font-size:13px; min-height:18px; margin:6px 0; }
-  #authGate .link{ background:none; border:0; color:var(--accent,#3b6cf5); cursor:pointer; font-size:13.5px; padding:6px 0; }
+  /* FR-11: cổng đăng nhập / đăng ký. Thẻ canh giữa bằng margin:auto để khi bàn
+     phím bật lên (màn thấp hơn thẻ) vẫn cuộn được tới ô trên cùng. */
+  #authGate{ position:fixed; inset:0; z-index:2000; background:var(--bg); display:flex; overflow-y:auto;
+             -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+             padding:calc(20px + env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom)); }
+  .auth-card{ margin:auto; width:100%; max-width:400px; background:var(--card); border-radius:24px;
+              padding:28px 22px 20px; box-shadow:var(--sh); }
+  .auth-brand{ display:flex; align-items:center; justify-content:center; gap:9px; margin-bottom:22px; }
+  .auth-brand .mark{ display:flex; gap:2px; align-items:flex-end; height:22px; }
+  .auth-brand .mark i{ width:3px; border-radius:3px; background:var(--accent); }
+  .auth-brand b{ font-size:22px; letter-spacing:-.5px; line-height:1; }
+  .auth-tag{ font-size:11px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; line-height:1;
+             color:var(--accent-ink); background:var(--accent-soft); border-radius:999px; padding:5px 9px; }
+  .auth-card form, #authPending{ display:flex; flex-direction:column; }
+  .auth-card h2{ margin:0; font-size:22px; line-height:1.25; letter-spacing:-.3px; text-align:center; }
+  .auth-sub{ margin:6px 0 20px; color:var(--muted); font-size:14px; line-height:1.45; text-align:center; }
+  .auth-card label{ font-size:13px; font-weight:600; margin:0 0 6px; }
+  .auth-card input{ display:block; width:100%; height:50px; border:1.5px solid var(--track); border-radius:14px;
+                    padding:0 14px; font-size:16px; background:var(--field); color:var(--fg); outline:none;
+                    margin:0 0 14px; -webkit-appearance:none; appearance:none; }
+  .auth-card input::placeholder{ color:var(--faint); }
+  .auth-card input:focus{ border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .auth-pass{ position:relative; }
+  .auth-pass input{ padding-right:68px; }
+  .auth-eye{ position:absolute; top:3px; right:3px; height:44px; min-width:56px; padding:0 10px; border-radius:10px;
+             font-size:13px; font-weight:600; color:var(--muted); }
+  .auth-eye:active{ background:var(--card-2); }
+  .auth-hint{ margin:-8px 0 14px; color:var(--muted); font-size:12.5px; }
+  .auth-err{ margin:0 0 14px; padding:10px 12px; border-radius:12px; background:var(--bad-bg); color:var(--bad-fg);
+             font-size:13.5px; line-height:1.4; }
+  .auth-card .go-btn{ margin-top:2px; height:52px; padding:0 16px; font-size:16px; }
+  .auth-link{ margin-top:6px; min-height:44px; padding:0 8px; color:var(--muted); font-size:14px; text-align:center; }
+  .auth-link b{ color:var(--accent-ink); font-weight:700; }
+  .auth-note{ margin:8px 0 0; padding:10px 12px; border-radius:12px; background:var(--card-2); color:var(--muted);
+              font-size:12.5px; line-height:1.45; text-align:center; }
+  .auth-ico{ width:64px; height:64px; margin:0 auto 14px; border-radius:50%; background:var(--accent-soft);
+             display:grid; place-items:center; font-size:30px; }
   #tokenOnce code{ display:block; word-break:break-all; background:var(--card,#fff); padding:8px; border-radius:8px; font-size:12.5px; margin:6px 0; }
 
   /* status bar mock — ẩn: trên browser thật nó hiện giờ giả "9:41",
@@ -250,7 +280,10 @@
   .set-row input, .set-row textarea, .set-row select{ background:var(--field); }
   .set-row select{ background:none; }
   .set-main b{ font-size:15px; font-weight:600; display:block; }
-  .set-main small{ color:var(--muted); font-size:12px; }
+  .set-main small{ color:var(--muted); font-size:12.5px; display:block; line-height:1.45; margin-top:2px; }
+  .set-empty{ display:block; padding:14px 17px; color:var(--muted); font-size:13px; line-height:1.45; }
+  #tokenOnce{ padding:14px 17px; }
+  #tokenOnce small{ color:var(--muted); font-size:12.5px; line-height:1.45; display:block; }
   .set-val{ color:var(--muted); font-size:14px; display:flex; align-items:center; gap:6px; }
   .set-row select{ border:none; background:none; text-align:right; font-weight:600; color:var(--fg);
                    font-size:14px; direction:rtl; }
@@ -509,32 +542,48 @@
 <body>
 <!-- FR-11 Enterprise: cổng đăng nhập (chỉ hiện khi server trả 401) -->
 <div id="authGate" class="hidden">
-  <div class="start-card">
-    <div class="brand" style="margin-bottom:10px"><b>Manju</b><sup>®</sup> <small style="color:var(--muted)">Enterprise</small></div>
-    <div id="authLogin">
-      <span class="f-lbl">Số điện thoại</span>
-      <input id="authPhone" inputmode="tel" autocomplete="username" placeholder="09xxxxxxxx" />
-      <span class="f-lbl">Mật khẩu</span>
-      <input id="authPass" type="password" autocomplete="current-password" />
-      <div class="err" id="authErr"></div>
-      <button class="go-btn" id="authLoginBtn">Đăng nhập</button>
-      <button class="link" id="authToReg">Chưa có tài khoản? Đăng ký</button>
+  <div class="auth-card">
+    <div class="auth-brand">
+      <span class="mark"><i style="height:8px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:13px"></i><i style="height:7px"></i></span>
+      <b>Manju</b><span class="auth-tag">Enterprise</span>
     </div>
-    <div id="authRegister" class="hidden">
-      <span class="f-lbl">Họ tên</span>
-      <input id="regName" autocomplete="name" placeholder="Nguyễn Văn A" />
-      <span class="f-lbl">Số điện thoại</span>
-      <input id="regPhone" inputmode="tel" autocomplete="username" placeholder="09xxxxxxxx" />
-      <span class="f-lbl">Mật khẩu (≥ 6 ký tự)</span>
-      <input id="regPass" type="password" autocomplete="new-password" />
-      <button class="go-btn" id="authRegBtn">Đăng ký</button>
-      <button class="link" id="authToLogin">Đã có tài khoản? Đăng nhập</button>
-      <small style="color:var(--muted)">Người đăng ký đầu tiên là admin. Tài khoản sau cần admin duyệt.</small>
-    </div>
+    <form id="authLogin" novalidate>
+      <h2>Đăng nhập</h2>
+      <p class="auth-sub">Dùng số điện thoại và mật khẩu của bạn.</p>
+      <label for="authPhone">Số điện thoại</label>
+      <input id="authPhone" type="tel" inputmode="tel" autocomplete="username" placeholder="09xxxxxxxx" />
+      <label for="authPass">Mật khẩu</label>
+      <div class="auth-pass">
+        <input id="authPass" type="password" autocomplete="current-password" placeholder="Nhập mật khẩu" />
+        <button type="button" class="auth-eye" data-eye="authPass" aria-label="Hiện mật khẩu">Hiện</button>
+      </div>
+      <p class="auth-err hidden" id="authErr" role="alert"></p>
+      <button class="go-btn" id="authLoginBtn" type="submit">Đăng nhập</button>
+      <button class="auth-link" id="authToReg" type="button">Chưa có tài khoản? <b>Đăng ký</b></button>
+    </form>
+    <form id="authRegister" class="hidden" novalidate>
+      <h2>Tạo tài khoản</h2>
+      <p class="auth-sub">Điền thông tin để dùng Manju của công ty.</p>
+      <label for="regName">Họ tên</label>
+      <input id="regName" type="text" autocomplete="name" autocapitalize="words" placeholder="Nguyễn Văn A" />
+      <label for="regPhone">Số điện thoại</label>
+      <input id="regPhone" type="tel" inputmode="tel" autocomplete="username" placeholder="09xxxxxxxx" />
+      <label for="regPass">Mật khẩu</label>
+      <div class="auth-pass">
+        <input id="regPass" type="password" autocomplete="new-password" placeholder="Ít nhất 6 ký tự" />
+        <button type="button" class="auth-eye" data-eye="regPass" aria-label="Hiện mật khẩu">Hiện</button>
+      </div>
+      <p class="auth-err hidden" id="regErr" role="alert"></p>
+      <button class="go-btn" id="authRegBtn" type="submit">Đăng ký</button>
+      <button class="auth-link" id="authToLogin" type="button">Đã có tài khoản? <b>Đăng nhập</b></button>
+      <p class="auth-note">Người đăng ký đầu tiên là admin. Các tài khoản sau cần admin duyệt mới dùng được.</p>
+    </form>
     <div id="authPending" class="hidden">
-      <h3 style="margin:0 0 8px">⏳ Chờ admin duyệt</h3>
-      <p style="color:var(--muted);font-size:13.5px">Tài khoản đã tạo. Nhờ admin vào Settings → Quản lý user để duyệt, rồi tải lại trang.</p>
-      <button class="link" id="authPendingLogout">Đăng xuất</button>
+      <div class="auth-ico" aria-hidden="true">⏳</div>
+      <h2>Chờ admin duyệt</h2>
+      <p class="auth-sub">Tài khoản của bạn đã được tạo. Nhờ admin mở Manju, vào Cài đặt → Quản lý user rồi bấm Duyệt.</p>
+      <button class="go-btn" id="authPendingRetry" type="button">Tôi đã được duyệt</button>
+      <button class="auth-link" id="authPendingLogout" type="button">Đăng xuất</button>
     </div>
   </div>
 </div>
@@ -630,7 +679,7 @@
   <section class="screen full" id="screen-record">
     <div class="rec-head">
       <button class="round-btn close" id="recClose">✕</button>
-      <span class="title">Recording</span>
+      <span class="title">Ghi âm</span>
     </div>
 
     <!-- Thẻ chuẩn bị: tên họp + agenda + người tham gia, bấm Bắt đầu mới ghi -->
@@ -685,7 +734,7 @@
 
   <!-- ══════ SETTINGS ══════ -->
   <section class="screen" id="screen-settings">
-    <div class="page-title">Settings</div>
+    <div class="page-title">Cài đặt</div>
 
     <div class="hero-pro">
       <div class="stars"></div>
@@ -800,15 +849,15 @@
       <div class="set-card">
         <div class="set-row">
           <div class="set-ico">👤</div>
-          <div class="set-main"><b id="entUserName"></b><small>Đang đăng nhập trên thiết bị này</small></div>
+          <div class="set-main"><b id="entUserName"></b><small id="entUserSub"></small></div>
           <button class="mini" id="entLogout">Đăng xuất</button>
         </div>
       </div>
-      <div class="sec-label">API token cho LLM (MCP)</div>
+      <div class="sec-label">Kết nối AI (MCP)</div>
       <div class="set-card">
         <div class="set-row">
           <div class="set-ico">🤖</div>
-          <div class="set-main"><b>Cắm LLM của bạn vào các cuộc họp</b><small>Token dùng cho <code>mcp_server/enterprise.py</code> — LLM chỉ đọc được đúng những bản ghi bạn được xem</small></div>
+          <div class="set-main"><b>Cho AI đọc bản ghi của bạn</b><small>Tạo token rồi dán vào cấu hình MCP. AI chỉ thấy những bản ghi bạn được xem.</small></div>
           <button class="mini pri" id="tokenCreate">Tạo token</button>
         </div>
         <div class="set-row hidden" id="tokenOnce" style="display:block">

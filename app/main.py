@@ -92,6 +92,18 @@ def _scope_owner(request: Request) -> str | None:
 
 
 @app.middleware("http")
+async def fresh_app_shell(request: Request, call_next):
+    """Shell app (HTML/JS) không có Cache-Control thì trình duyệt tự đoán hạn cache
+    và giữ giao diện cũ sau khi deploy. `no-cache` = luôn hỏi lại server; ETag
+    vẫn cho 304 nên không tốn băng thông."""
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/sw.js") or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.middleware("http")
 async def enterprise_gate(request: Request, call_next):
     request.state.user = None
     path = request.url.path
