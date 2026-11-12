@@ -1,0 +1,13 @@
+.git
+.venv
+data
+tests
+docs
+.claude
+.cursor
+*.md
+!README-enterprise.md
+.env*
+__pycache__
+*.pyc
+.github

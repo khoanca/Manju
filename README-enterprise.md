@@ -34,6 +34,22 @@ docker run -d --name manju -p 8000:8000 \
 `localhost`). Image chạy `--proxy-headers` nên cookie `Secure` tự bật khi có
 `X-Forwarded-Proto: https`.
 
+## Deploy lên Fly.io (tự động qua GitHub Actions)
+
+Repo có sẵn `fly.toml` + workflow `.github/workflows/fly-deploy.yml`: mỗi lần push `main`
+(hoặc bấm *Run workflow*) sẽ build image trên Fly, tạo app + volume lần đầu, set key và deploy.
+
+1. Tạo tài khoản fly.io → **Tokens** → tạo *Deploy token* (hoặc `fly tokens create deploy`).
+2. GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**:
+   - `FLY_API_TOKEN` = token Fly ở bước 1 (bắt buộc)
+   - `SONIOX_API_KEY` = key Soniox (lần đầu; đổi key thì cập nhật secret rồi chạy lại workflow)
+3. (Tuỳ chọn) *Variables*: `FLY_APP` (mặc định `mse-manju` → link `https://mse-manju.fly.dev`),
+   `FLY_ORG` (mặc định `personal`).
+4. **Actions → Deploy to Fly.io → Run workflow**. Xong thì mở `https://<FLY_APP>.fly.dev` → Đăng ký (người đầu = admin).
+
+Chi phí: 1 máy `shared-cpu-1x` 1 GB chạy liên tục + volume 1 GB ≈ 6 USD/tháng. HTTPS tự động,
+`force_https` bật nên mic trong trình duyệt dùng được. Dữ liệu ở volume `manju_data` (xem Backup).
+
 Không Docker: `MANJU_EDITION=enterprise MANJU_DATA_DIR=/data uv run uvicorn app.main:app --host 0.0.0.0`.
 
 Env:

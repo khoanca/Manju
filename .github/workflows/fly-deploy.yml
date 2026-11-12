@@ -1,0 +1,52 @@
+# Deploy Manju Enterprise lên Fly.io mỗi khi push main (hoặc bấm Run workflow).
+# Cần GitHub secrets: FLY_API_TOKEN (bắt buộc), SONIOX_API_KEY (lần đầu, hoặc khi đổi key).
+# Tuỳ chọn repo variables: FLY_APP (mặc định mse-manju), FLY_ORG (mặc định personal).
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      APP: ${{ vars.FLY_APP || 'mse-manju' }}
+      ORG: ${{ vars.FLY_ORG || 'personal' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create app + volume (chỉ lần đầu, các lần sau bỏ qua)
+        run: |
+          flyctl apps list --json | grep -q "\"Name\": \"$APP\"" \
+            || flyctl apps create "$APP" --org "$ORG"
+          flyctl volumes list -a "$APP" --json | grep -q '"name": "manju_data"' \
+            || flyctl volumes create manju_data -a "$APP" --region sin --size 1 --yes
+
+      - name: Set Soniox key (nếu có trong GitHub secrets)
+        env:
+          SONIOX_API_KEY: ${{ secrets.SONIOX_API_KEY }}
+        run: |
+          if [ -n "$SONIOX_API_KEY" ]; then
+            flyctl secrets set SONIOX_API_KEY="$SONIOX_API_KEY" -a "$APP" --stage
+          else
+            echo "::warning::SONIOX_API_KEY chưa có trong GitHub secrets — app chạy nhưng không ghi/upload được."
+          fi
+
+      - name: Deploy
+        run: flyctl deploy --remote-only --ha=false -a "$APP"
+
+      - name: Smoke
+        run: |
+          sleep 10
+          curl -sSf "https://$APP.fly.dev/" -o /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://$APP.fly.dev/api/settings")
+          [ "$code" = "401" ] || { echo "expect 401 from /api/settings, got $code"; exit 1; }
+          echo "OK: https://$APP.fly.dev"
