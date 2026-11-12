@@ -84,7 +84,7 @@ async function applyEdition(s){
   if (!ME){ try{ const r = await _rawFetch("/api/auth/me"); if (r.ok) ME = await r.json(); }catch{} }
   const hero = document.querySelector("#screen-settings .hero-pro");
   if (hero){
-    hero.querySelector("h3").textContent = "🏢 Manju Enterprise";
+    hero.querySelector("h3").innerHTML = ico("building") + " Manju Enterprise";
     hero.querySelector("p").textContent = "Audio ở lại máy bạn (trình duyệt), chỉ văn bản lưu trên server công ty. Nhận dạng qua Soniox.";
     hero.querySelector(".cta").textContent = ME ? `${ME.name} · ${ME.role === "admin" ? "Admin" : "Thành viên"}` : "Đã đăng nhập";
   }
@@ -140,7 +140,7 @@ async function loadTokens(){
   box.innerHTML = "";
   for (const t of toks){
     const row = document.createElement("div"); row.className = "set-row";
-    row.innerHTML = `<div class="set-ico">🔑</div><div class="set-main"><b></b><small></small></div>`;
+    row.innerHTML = `<div class="set-ico">${ico("key")}</div><div class="set-main"><b></b><small></small></div>`;
     row.querySelector("b").textContent = t.label || "(không tên)";
     row.querySelector("small").textContent = "Tạo " + new Date(t.created_at).toLocaleDateString("vi-VN");
     const del = document.createElement("button"); del.className = "mini"; del.textContent = "Xoá";
@@ -213,9 +213,9 @@ async function startLiveDirect(meta){
            stopping: false, paused: false, base: 0, resumeAt: Date.now(), requestedMode: "direct",
            timer: setInterval(tickTimer, 300) };
   subs.innerHTML = ""; recTimer.textContent = "00:00:00";
-  $("modeBadge").textContent = "☁ Soniox"; $("modeBadge").classList.remove("hidden");
+  $("modeBadge").innerHTML = ico("cloud") + " Soniox"; $("modeBadge").classList.remove("hidden");
   setPill("KẾT NỐI…", true); setWave("on");
-  $("recPause").textContent = "❚❚ Pause";
+  $("recPause").innerHTML = ico("pause") + " Pause";
   recHint.textContent = "Audio lưu trên thiết bị này — server công ty chỉ nhận văn bản.";
   acquireWakeLock();
   try{ await soniox.start(); }
