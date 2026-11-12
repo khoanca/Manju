@@ -2,6 +2,8 @@
 // upload, live (mic → WS, có buffer + tự nối lại), settings (localStorage +
 // server), wake lock, PWA, OPFS cho client mỏng (PRD FR-4).
 const $ = (id) => document.getElementById(id);
+// Icon line (sprite <symbol id="i-*"> trong index.html) — dùng khi dựng HTML động.
+const ico = (name) => `<svg class="i"><use href="#i-${name}"/></svg>`;
 const ICN = {
   cal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 9h18M8 3v4M16 3v4"/></svg>',
   doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/></svg>',
@@ -312,8 +314,8 @@ function recCard(m, opfs){
   const li = document.createElement("li");
   li.className = "rec-card";
   const words = m.words != null ? m.words : Math.round((m.chars||0)/5);
-  const chips = (m.audio ? `<span class="chip audio">🔊 Audio</span>` : (opfs[m.id] ? `<span class="chip audio">📱 Audio</span>` : ""))
-              + (m.corrected ? `<span class="chip ai">✦ AI</span>` : "");
+  const chips = (m.audio ? `<span class="chip audio">${ico("volume")} Audio</span>` : (opfs[m.id] ? `<span class="chip audio">${ico("smartphone")} Audio</span>` : ""))
+              + (m.corrected ? `<span class="chip ai">${ico("sparkles")} AI</span>` : "");
   li.innerHTML = `
     <div class="rec-top">
       <div class="avatar"><i style="height:9px"></i><i style="height:16px"></i><i style="height:22px"></i><i style="height:14px"></i><i style="height:8px"></i></div>
@@ -352,7 +354,7 @@ function renderHistory(){
   $("filterBtn").classList.toggle("on", active || !$("filters").classList.contains("hidden"));
   box.innerHTML = "";
   if (!items.length){
-    box.innerHTML = `<div class="empty"><span class="big">🎙️</span><b>${active ? "Không tìm thấy" : "Chưa có bản ghi nào"}</b>${active ? "" : "Bấm nút micro để ghi, hoặc ＋ để tải file lên."}</div>`;
+    box.innerHTML = `<div class="empty"><span class="big">${ico("mic")}</span><b>${active ? "Không tìm thấy" : "Chưa có bản ghi nào"}</b>${active ? "" : "Bấm nút micro để ghi, hoặc ＋ để tải file lên."}</div>`;
     return;
   }
   const opfs = opfsMap();
@@ -1094,7 +1096,7 @@ let corrFetched = false;   // chỉ fetch lần đầu mở mục, không fetch 
 
 $("corrToggle").onclick = () => {
   const open = !$("corrBody").classList.toggle("hidden");
-  $("corrChevron").textContent = open ? "▾" : "▸";
+  $("corrChevron").innerHTML = ico(open ? "chevron-down" : "chevron-right");
   if (open && !corrFetched){ corrFetched = true; loadCorrections(); }
   if (open) refreshSlangBadge();
 };
@@ -1140,7 +1142,7 @@ function corrRow(c){
   pair.append(w, " → ", r);
   const meta = document.createElement("div"); meta.className = "corr-meta";
   const tag = document.createElement("button"); tag.className = "chip corr-tag";
-  tag.textContent = c.tag ? "🏷 " + c.tag : "🏷 tag…"; tag.title = "Bấm để sửa tag";
+  tag.innerHTML = ico("tag") + " "; tag.append(c.tag || "tag…"); tag.title = "Bấm để sửa tag";
   tag.onclick = () => editCorrTag(c, tag);
   const src = document.createElement("span"); src.className = "chip";
   src.textContent = CORR_SRC[c.source] || c.source;
@@ -1149,9 +1151,9 @@ function corrRow(c){
   st.textContent = CORR_ST[c.status] || c.status;
   meta.append(tag, src, ct, st);
   const acts = document.createElement("div"); acts.className = "corr-acts";
-  if (c.status !== "approved") acts.append(corrMini("✓ Duyệt", () => patchCorrection(c.id, { status: "approved" }), true));
-  if (c.status !== "rejected") acts.append(corrMini("✕ Loại", () => patchCorrection(c.id, { status: "rejected" })));
-  acts.append(corrMini("🗑", () => deleteCorrection(c)));
+  if (c.status !== "approved") acts.append(corrMini("Duyệt", () => patchCorrection(c.id, { status: "approved" }), true));
+  if (c.status !== "rejected") acts.append(corrMini("Loại", () => patchCorrection(c.id, { status: "rejected" })));
+  const del = corrMini("", () => deleteCorrection(c)); del.innerHTML = ico("trash"); del.title = "Xoá"; acts.append(del);
   meta.append(acts);
   row.append(pair, meta);
   return row;
@@ -1351,7 +1353,7 @@ fileInput.onchange = () => setFile(fileInput.files[0]);
 ["dragover","dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.style.borderColor = "var(--accent)"; }));
 ["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.style.borderColor = ""; }));
 drop.addEventListener("drop", ev => setFile(ev.dataTransfer.files[0]));
-function setFile(f){ if (!f) return; chosen = f; $("fileName").textContent = "📎 " + f.name; go.disabled = false; }
+function setFile(f){ if (!f) return; chosen = f; $("fileName").innerHTML = ico("paperclip") + " "; $("fileName").append(f.name); go.disabled = false; }
 go.onclick = async () => {
   if (!chosen) return;
   go.disabled = true;
@@ -1375,7 +1377,7 @@ function poll(jobId){
     const j = await (await fetch("/api/jobs/" + jobId)).json();
     setStatus(label(j.status), j.progress);
     if (j.status === "done"){
-      go.disabled = false; chosen = null; $("fileName").textContent = ""; setStatus("Xong ✅", 1);
+      go.disabled = false; chosen = null; $("fileName").textContent = ""; setStatus("Xong", 1);
       await loadHistory();
       if (j.transcript_id){ const m = ALL.find(x => x.id === j.transcript_id) || {id:j.transcript_id, title:downloadName}; openDetail(m); }
       return;
@@ -1385,7 +1387,7 @@ function poll(jobId){
   };
   tick();
 }
-const label = (s) => ({queued:"Đang xếp hàng…", running:"Đang transcribe…", correcting:"Đang sửa thuật ngữ (AI)…", done:"Xong ✅"}[s] || s);
+const label = (s) => ({queued:"Đang xếp hàng…", running:"Đang transcribe…", correcting:"Đang sửa thuật ngữ (AI)…", done:"Xong"}[s] || s);
 function setStatus(t, p){ $("status").textContent = t; $("bar").style.width = Math.round((p||0)*100) + "%"; }
 
 // ── Waveform bars ──────────────────────────────────────────────────────────
@@ -1600,7 +1602,7 @@ async function startLive(meta){
   subs.innerHTML = ""; recTimer.textContent = "00:00:00";
   $("modeBadge").classList.add("hidden");   // T-007: chờ msg session báo tier thực
   setPill("KẾT NỐI…", true); setWave("on");
-  $("recPause").textContent = "❚❚ Pause";
+  $("recPause").innerHTML = ico("pause") + " Pause";
   recHint.textContent = useOpfs
     ? "Audio lưu trên thiết bị này (không gửi lên server) — nhớ tải về nếu cần giữ lâu."
     : "Bấm Stop để kết thúc — văn bản & file ghi âm tự lưu.";
@@ -1618,7 +1620,7 @@ function handleLiveMsg(m){
   if (m.type === "ack_utt"){ if (live.pendingUtts) live.pendingUtts.delete(m.utt); return; }   // FR-11 direct
   if (m.type === "session"){   // T-007: badge tier thực được cấp (LiveConn forward khi có m.mode)
     if (m.mode === "direct") return;   // enterprise: badge đã đặt trong startLiveDirect
-    $("modeBadge").textContent = m.mode === "online" ? "☁ Online" : "🖥 Offline";
+    $("modeBadge").innerHTML = m.mode === "online" ? ico("cloud") + " Online" : ico("monitor") + " Offline";
     $("modeBadge").classList.remove("hidden");
     if (live.requestedMode === "online" && m.mode !== "online")
       recHint.textContent = "Không kết nối được dịch vụ online — đang chạy offline.";
@@ -1626,7 +1628,7 @@ function handleLiveMsg(m){
   }
   if (m.type === "ready"){ setPill("RECORDING", true); return; }
   if (m.type === "mode"){   // FR-10: provider chết giữa phiên → server tự rơi về offline
-    $("modeBadge").textContent = m.mode === "online" ? "☁ Online" : "🖥 Offline";
+    $("modeBadge").innerHTML = m.mode === "online" ? ico("cloud") + " Online" : ico("monitor") + " Offline";
     $("modeBadge").classList.remove("hidden");
     if (m.message) recHint.textContent = m.message;
     return;
@@ -1677,8 +1679,8 @@ function autoscroll(){ if (subs.scrollHeight - subs.scrollTop - subs.clientHeigh
 // pause / resume
 $("recPause").onclick = () => {
   if (!live || live.stopping) return;
-  if (!live.paused){ live.base += (Date.now() - live.resumeAt)/1000; live.paused = true; setPill("TẠM DỪNG", false); setWave("paused"); $("recPause").textContent = "▶ Tiếp tục"; }
-  else { live.resumeAt = Date.now(); live.paused = false; setPill("RECORDING", true); setWave("on"); $("recPause").textContent = "❚❚ Pause"; }
+  if (!live.paused){ live.base += (Date.now() - live.resumeAt)/1000; live.paused = true; setPill("TẠM DỪNG", false); setWave("paused"); $("recPause").innerHTML = ico("play") + " Tiếp tục"; }
+  else { live.resumeAt = Date.now(); live.paused = false; setPill("RECORDING", true); setWave("on"); $("recPause").innerHTML = ico("pause") + " Pause"; }
 };
 
 // stop & close: rời màn ghi NGAY, chốt & lưu chạy nền (US-825)

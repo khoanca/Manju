@@ -114,6 +114,12 @@
   .brand .mark i{ width:3px; border-radius:3px; background:var(--accent); }
   .brand b{ font-size:22px; letter-spacing:-.5px; }
   .brand sup{ font-size:9px; color:var(--muted); }
+  .i{ width:1.15em; height:1.15em; fill:none; stroke:currentColor; stroke-width:1.75; stroke-linecap:round;
+      stroke-linejoin:round; vertical-align:-.2em; flex:0 0 auto; }
+  .set-ico .i{ width:19px; height:19px; } .round-btn .i{ width:20px; height:20px; }
+  .empty .big .i{ width:44px; height:44px; stroke-width:1.5; } .drop .ico .i{ width:30px; height:30px; stroke-width:1.5; }
+  .chip .i{ width:12px; height:12px; } .btn-pause .i,.btn-stop .i{ width:16px; height:16px; }
+  .set-ico{ color:var(--fg); }
   .round-btn{ width:44px; height:44px; border-radius:50%; background:var(--card); box-shadow:var(--sh-sm);
               display:grid; place-items:center; color:var(--fg); font-size:18px; }
   .round-btn:active{ transform:scale(.94); }
@@ -588,7 +594,8 @@
   </div>
 </div>
 <div class="app">
-  <div class="statusbar"><span>9:41</span><span class="ico">••• 📶 🔋</span></div>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol><symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol><symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol><symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol><symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol><symbol id="i-pause" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></symbol><symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4v16l14-8z"/></symbol><symbol id="i-square" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></symbol><symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol><symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol><symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></symbol><symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6 5.6 1.9-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z"/><path d="M19 15v4"/><path d="M21 17h-4"/></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/></symbol><symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></symbol><symbol id="i-settings-2" viewBox="0 0 24 24"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></symbol><symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol><symbol id="i-wind" viewBox="0 0 24 24"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></symbol><symbol id="i-lightbulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></symbol><symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H3z"/><path d="M21 14h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h3z"/></symbol><symbol id="i-user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol><symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol><symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></symbol><symbol id="i-smartphone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></symbol><symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></symbol><symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol><symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol><symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/><path d="m15 5 4 4"/></symbol><symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></symbol><symbol id="i-tag" viewBox="0 0 24 24"><path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"/><path d="M7.5 7.5h.01"/></symbol><symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol><symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m21.4 11-9.2 9.2a6 6 0 0 1-8.5-8.5l8.6-8.6A4 4 0 1 1 18 8.8l-8.6 8.6a2 2 0 0 1-2.8-2.8l8.5-8.5"/></symbol><symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z"/></symbol><symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol><symbol id="i-building" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/></symbol><symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol><symbol id="i-sun-moon" viewBox="0 0 24 24"><path d="M12 8a2.8 2.8 0 1 0 0 8 2.8 2.8 0 1 0 0-8"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.3 17.7-1.4 1.4"/><path d="m19.1 4.9-1.4 1.4"/></symbol><symbol id="i-wifi" viewBox="0 0 24 24"><path d="M12 20h.01"/><path d="M8.5 16.4a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 14 0"/><path d="M2 8.8a15 15 0 0 1 20 0"/></symbol><symbol id="i-battery" viewBox="0 0 24 24"><rect x="2" y="7" width="16" height="10" rx="2"/><path d="M22 11v2"/><path d="M6 11v2"/><path d="M10 11v2"/></symbol></svg>
+  <div class="statusbar"><span>9:41</span><span class="ico"><svg class="i"><use href="#i-wifi"/></svg> <svg class="i"><use href="#i-battery"/></svg></span></div>
 
   <!-- ══════ Sidebar (chỉ hiện trên laptop) ══════ -->
   <aside class="sidebar">
@@ -623,16 +630,16 @@
       </div>
       <div class="page-title only-desktop" style="margin:0">Bản ghi</div>
       <div class="h-actions">
-        <button class="round-btn" id="searchBtn" title="Tìm theo tên">🔍</button>
+        <button class="round-btn" id="searchBtn" title="Tìm theo tên"><svg class="i"><use href="#i-search"/></svg></button>
         <button class="round-btn" id="filterBtn" title="Lọc &amp; sắp xếp">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
         </button>
-        <button class="round-btn" id="addBtn" title="Tải file lên">＋</button>
+        <button class="round-btn" id="addBtn" title="Tải file lên"><svg class="i"><use href="#i-plus"/></svg></button>
       </div>
     </div>
 
     <div class="search hidden" id="searchBox">
-      <span>🔍</span><input id="searchInput" placeholder="Tìm theo tên bản ghi…" />
+      <span><svg class="i"><use href="#i-search"/></svg></span><input id="searchInput" placeholder="Tìm theo tên bản ghi…" />
     </div>
 
     <!-- Lọc & sắp xếp bản ghi (client-side; dữ liệu đã có sẵn từ /api/transcripts) -->
@@ -678,7 +685,7 @@
   <!-- ══════ RECORD ══════ -->
   <section class="screen full" id="screen-record">
     <div class="rec-head">
-      <button class="round-btn close" id="recClose">✕</button>
+      <button class="round-btn close" id="recClose"><svg class="i"><use href="#i-x"/></svg></button>
       <span class="title">Ghi âm</span>
     </div>
 
@@ -710,9 +717,6 @@
 
     <div id="recBody" class="hidden" style="display:contents">
     <div class="hero">
-      <span class="spark" style="left:22px;top:26px">✦</span>
-      <span class="spark" style="right:30px;bottom:60px;font-size:14px">✦</span>
-      <span class="spark" style="right:60px;top:40px;font-size:12px">✧</span>
       <div class="pill live" id="recPill"><span class="dot"></span> RECORDING</div>
       <span class="pill hidden" id="modeBadge" style="margin-left:8px"></span>
       <div class="wave" id="wave"></div>
@@ -720,13 +724,13 @@
     </div>
 
     <div class="trans-card">
-      <div class="trans-label">✨ LIVE TRANSCRIPTION</div>
+      <div class="trans-label"><svg class="i"><use href="#i-sparkles"/></svg> LIVE TRANSCRIPTION</div>
       <div id="subtitles"></div>
     </div>
 
     <div class="rec-controls">
-      <button class="btn-pause" id="recPause">❚❚ Pause</button>
-      <button class="btn-stop" id="recStop">■ Stop</button>
+      <button class="btn-pause" id="recPause"><svg class="i"><use href="#i-pause"/></svg> Pause</button>
+      <button class="btn-stop" id="recStop"><svg class="i"><use href="#i-square"/></svg> Stop</button>
     </div>
     <div class="rec-hint" id="recHint">Bấm Stop để kết thúc — văn bản &amp; file ghi âm tự lưu.</div>
     </div>
@@ -738,9 +742,9 @@
 
     <div class="hero-pro">
       <div class="stars"></div>
-      <h3>🔒 Riêng tư tuyệt đối</h3>
+      <h3><svg class="i"><use href="#i-lock"/></svg> Riêng tư tuyệt đối</h3>
       <p>Ghi âm, transcribe &amp; lưu trữ đều chạy 100% trên máy bạn — không gửi lên đám mây.</p>
-      <span class="cta">✓ Đang bật</span>
+      <span class="cta"><svg class="i"><use href="#i-check"/></svg> Đang bật</span>
     </div>
 
     <div class="usage">
@@ -751,12 +755,12 @@
     <div class="sec-label">Cấu hình transcribe</div>
     <div class="set-card">
       <div class="set-row">
-        <div class="set-ico">🌐</div>
+        <div class="set-ico"><svg class="i"><use href="#i-globe"/></svg></div>
         <div class="set-main"><b>Ngôn ngữ</b><small>Ngôn ngữ chính của hội thoại</small></div>
         <select id="lang"><option value="vi">Tiếng Việt</option><option value="en">English</option></select>
       </div>
       <div class="set-row local-only">
-        <div class="set-ico">🎚️</div>
+        <div class="set-ico"><svg class="i"><use href="#i-sliders"/></svg></div>
         <div class="set-main"><b>Chất lượng model</b><small>Chính xác ↔ tốc độ (file upload)</small></div>
         <select id="model">
           <option value="small">Nhanh</option>
@@ -765,34 +769,34 @@
         </select>
       </div>
       <div class="set-row" id="rowCorrect">
-        <div class="set-ico">✨</div>
+        <div class="set-ico"><svg class="i"><use href="#i-sparkles"/></svg></div>
         <div class="set-main"><b>Sửa thuật ngữ bằng AI</b><small>Pass 2 — soát từ tiếng Anh phiên âm sai</small></div>
         <div class="sw on" id="swCorrect"></div>
         <input type="checkbox" id="correct" checked class="hidden" />
       </div>
       <div class="local-only set-row" id="rowDiarize">
-        <div class="set-ico">🗣️</div>
+        <div class="set-ico"><svg class="i"><use href="#i-users"/></svg></div>
         <div class="set-main"><b>Nhận diện người nói</b><small id="diarizeHint">Pass 3 — tách "ai nói câu nào" (cần tải model)</small></div>
         <div class="sw" id="swDiarize"></div>
       </div>
       <div class="local-only set-row" id="rowFlagWords">
-        <div class="set-ico">🚩</div>
+        <div class="set-ico"><svg class="i"><use href="#i-flag"/></svg></div>
         <div class="set-main"><b>Đánh dấu từ nghe không rõ cho pass 2</b><small>Chậm hơn một chút</small></div>
         <div class="sw" id="swFlagWords"></div>
       </div>
       <div class="local-only set-row" id="rowDenoise">
-        <div class="set-ico">🎛️</div>
+        <div class="set-ico"><svg class="i"><use href="#i-settings-2"/></svg></div>
         <div class="set-main"><b>Khử ồn micro</b><small>Thử nghiệm</small></div>
         <div class="sw" id="swDenoise"></div>
       </div>
       <div id="denoiseAdv" class="local-only hidden">
         <div class="set-row">
-          <div class="set-ico">🔊</div>
+          <div class="set-ico"><svg class="i"><use href="#i-volume"/></svg></div>
           <div class="set-main"><b>Cường độ khử</b><small>Càng cao càng mạnh tay</small></div>
           <div class="set-val"><input type="range" id="dnStrength" min="0" max="100" style="width:104px" /><span id="dnStrengthVal">100%</span></div>
         </div>
         <div class="set-row">
-          <div class="set-ico">🌫️</div>
+          <div class="set-ico"><svg class="i"><use href="#i-wind"/></svg></div>
           <div class="set-main"><b>Chế độ nền</b><small>Nền tiếng ồn ổn định hay thay đổi</small></div>
           <select id="dnMode">
             <option value="stationary">Nền ổn định</option>
@@ -805,7 +809,7 @@
           <div class="sw" id="swDnRumble"></div>
         </div>
         <div class="set-row">
-          <div class="set-ico">💡</div>
+          <div class="set-ico"><svg class="i"><use href="#i-lightbulb"/></svg></div>
           <div class="set-main"><b>Khử ù điện lưới</b><small>Tiếng ù đều từ nguồn điện</small></div>
           <select id="dnHum">
             <option value="off">Tắt</option>
@@ -814,7 +818,7 @@
           </select>
         </div>
         <div class="set-row">
-          <div class="set-ico">📂</div>
+          <div class="set-ico"><svg class="i"><use href="#i-folder"/></svg></div>
           <div class="set-main"><b>Khử ồn cho file tải lên</b><small>Áp dụng cả khi transcribe file</small></div>
           <div class="sw" id="swDnUpload"></div>
         </div>
@@ -826,12 +830,12 @@
       <div class="sec-label">Nhận dạng online (Soniox)</div>
       <div class="set-card">
         <div class="set-row">
-          <div class="set-ico">✨</div>
+          <div class="set-ico"><svg class="i"><use href="#i-sparkles"/></svg></div>
           <div class="set-main"><b>AI làm sạch transcript (pass 2)</b><small>Soát &amp; sửa thuật ngữ cho bản ghi online</small></div>
           <div class="sw" id="swCloudCleanup"></div>
         </div>
         <div class="set-row">
-          <div class="set-ico">🎧</div>
+          <div class="set-ico"><svg class="i"><use href="#i-headphones"/></svg></div>
           <div class="set-main"><b>Nghe lại bằng model async sau khi Dừng</b><small>Chính xác hơn</small></div>
           <div class="sw" id="swCloudRelisten"></div>
         </div>
@@ -848,7 +852,7 @@
       <div class="sec-label">Tài khoản</div>
       <div class="set-card">
         <div class="set-row">
-          <div class="set-ico">👤</div>
+          <div class="set-ico"><svg class="i"><use href="#i-user"/></svg></div>
           <div class="set-main"><b id="entUserName"></b><small id="entUserSub"></small></div>
           <button class="mini" id="entLogout">Đăng xuất</button>
         </div>
@@ -856,7 +860,7 @@
       <div class="sec-label">Kết nối AI (MCP)</div>
       <div class="set-card">
         <div class="set-row">
-          <div class="set-ico">🤖</div>
+          <div class="set-ico"><svg class="i"><use href="#i-bot"/></svg></div>
           <div class="set-main"><b>Cho AI đọc bản ghi của bạn</b><small>Tạo token rồi dán vào cấu hình MCP. AI chỉ thấy những bản ghi bạn được xem.</small></div>
           <button class="mini pri" id="tokenCreate">Tạo token</button>
         </div>
@@ -875,7 +879,7 @@
     <div class="sec-label">Chung</div>
     <div class="set-card">
       <div class="set-row">
-        <div class="set-ico">🌓</div>
+        <div class="set-ico"><svg class="i"><use href="#i-sun-moon"/></svg></div>
         <div class="set-main"><b>Giao diện</b><small>Sáng, tối, hoặc theo chế độ của máy</small></div>
         <select id="themeSel" aria-label="Giao diện">
           <option value="auto">Theo máy</option>
@@ -884,17 +888,17 @@
         </select>
       </div>
       <div class="set-row">
-        <div class="set-ico">🎙️</div>
+        <div class="set-ico"><svg class="i"><use href="#i-mic"/></svg></div>
         <div class="set-main"><b>Engine</b><small>Tự chọn theo năng lực máy chạy app</small></div>
         <div class="set-val" id="engineVal">…</div>
       </div>
       <div class="set-row local-only">
-        <div class="set-ico">📲</div>
+        <div class="set-ico"><svg class="i"><use href="#i-smartphone"/></svg></div>
         <div class="set-main"><b>Lưu audio trên thiết bị này</b><small id="localAudioHint">Bản ghi âm nằm trong bộ nhớ trình duyệt, không gửi lên server — nhớ tải về nếu cần giữ lâu (iOS có thể tự dọn sau ~7 ngày không dùng)</small></div>
         <div class="sw" id="swLocalAudio"></div>
       </div>
       <div class="local-only set-row" id="rowOpfsExport">
-        <div class="set-ico">💾</div>
+        <div class="set-ico"><svg class="i"><use href="#i-save"/></svg></div>
         <div class="set-main"><b>Tải bản ghi trong trình duyệt về máy</b><small id="opfsExportHint">Đang kiểm tra…</small></div>
         <button class="mini pri" id="opfsExport" disabled>Tải .zip</button>
       </div>
@@ -906,7 +910,7 @@
         </div>
       </div>
       <div class="set-row">
-        <div class="set-ico">📱</div>
+        <div class="set-ico"><svg class="i"><use href="#i-smartphone"/></svg></div>
         <div class="set-main"><b>App Version</b></div>
         <div class="set-val">1.1.0</div>
       </div>
@@ -920,9 +924,9 @@
     <div class="sec-label">Thư viện từ</div>
     <div class="set-card">
       <button class="set-row corr-head" id="corrToggle">
-        <div class="set-ico">📚</div>
+        <div class="set-ico"><svg class="i"><use href="#i-book"/></svg></div>
         <div class="set-main"><b>Thư viện từ</b><small>Cặp sửa lỗi app học từ chỉnh sửa của bạn — chỉ cặp Đã duyệt được dùng để mồi ASR/pass 2</small></div>
-        <div class="set-val" id="corrChevron">▸</div>
+        <div class="set-val" id="corrChevron"><svg class="i"><use href="#i-chevron-right"/></svg></div>
       </button>
       <div class="hidden" id="corrBody">
         <div class="corr-seed">
@@ -977,11 +981,11 @@
   <!-- ══════ UPLOAD ══════ -->
   <section class="screen" id="screen-upload">
     <div class="back-row">
-      <button class="round-btn" data-back>‹</button>
+      <button class="round-btn" data-back><svg class="i"><use href="#i-chevron-left"/></svg></button>
       <span class="title">Tải file lên</span>
     </div>
     <div class="drop" id="drop">
-      <span class="ico">⬆️</span>
+      <span class="ico"><svg class="i"><use href="#i-upload"/></svg></span>
       <strong>Chọn file ghi âm</strong><br/>
       <small style="color:var(--faint)">mp3 · m4a · wav · mp4 · …</small>
       <div class="fname" id="fileName"></div>
@@ -1003,10 +1007,10 @@
   <!-- ══════ DETAIL ══════ -->
   <section class="screen" id="screen-detail">
     <div class="back-row">
-      <button class="round-btn" data-back>‹</button>
+      <button class="round-btn" data-back><svg class="i"><use href="#i-chevron-left"/></svg></button>
       <span class="title" id="detTitle">Bản ghi</span>
-      <span class="chip audio hidden" id="editedBadge">✎ đã sửa tay</span>
-      <span class="chip audio hidden" id="goldenBadge">★ bản chuẩn</span>
+      <span class="chip audio hidden" id="editedBadge"><svg class="i"><use href="#i-pencil"/></svg> đã sửa tay</span>
+      <span class="chip audio hidden" id="goldenBadge"><svg class="i"><use href="#i-star"/></svg> bản chuẩn</span>
     </div>
     <div class="det-card">
       <div class="det-actions">
@@ -1024,9 +1028,9 @@
       </div>
       <div class="audio-wrap hidden" id="audioWrap">
         <audio id="player" controls preload="none"></audio>
-        <a class="mini" id="dlAudio" download>⬇︎</a>
+        <a class="mini" id="dlAudio" download><svg class="i"><use href="#i-download"/></svg></a>
       </div>
-      <p class="edit-hint" id="editHint">✎ Sửa trực tiếp trong ô dưới. Bản sửa nuôi thư viện tự học (lần sau máy nhận đúng hơn) và dùng làm chuẩn đo độ chính xác.</p>
+      <p class="edit-hint" id="editHint"><svg class="i"><use href="#i-pencil"/></svg> Sửa trực tiếp trong ô dưới. Bản sửa nuôi thư viện tự học (lần sau máy nhận đúng hơn) và dùng làm chuẩn đo độ chính xác.</p>
       <textarea id="result" placeholder="Text…"></textarea>
       <div id="segList" class="segs" style="display:none"></div>
       <div id="varPanel" class="var-panel" style="display:none">
