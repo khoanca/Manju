@@ -280,16 +280,23 @@ async function messupJson(path, init){
   return data;
 }
 function messupLinkForm(note, again){
-  note.textContent = "Liên kết tài khoản Messup của bạn một lần để gửi cuộc họp vào kho chung của công ty. Mật khẩu không được lưu ở Manju.";
+  note.textContent = "Liên kết một lần để gửi cuộc họp vào kho chung của công ty: bằng tài khoản Messup của bạn, hoặc bằng khoá Manju của một bot (admin tạo ở trang bot trên Messup). Mật khẩu không được lưu ở Manju.";
+  const fail = (btn) => (e) => { note.textContent = e.message; note.className = "var-note warn"; btn.disabled = false; };
+  const send = (btn, body) => async () => {
+    btn.disabled = true;
+    try{ await messupJson("/api/messup/link", { method: "POST", body }); again(); }
+    catch(e){ fail(btn)(e); }
+  };
   const login = mkEl("input", { placeholder: "Tài khoản Messup", autocomplete: "off" });
   const pass = mkEl("input", { type: "password", placeholder: "Mật khẩu Messup", autocomplete: "off" });
   const btn = mkEl("button", { className: "mini pri", textContent: "Liên kết" });
-  btn.onclick = async () => {
-    btn.disabled = true;
-    try{ await messupJson("/api/messup/link", { method: "POST", body: { login: login.value, password: pass.value } }); again(); }
-    catch(e){ note.textContent = e.message; note.className = "var-note warn"; btn.disabled = false; }
-  };
-  return mkEl("div", { className: "var-controls" }, mkEl("label", {}, "Tài khoản", login), mkEl("label", {}, "Mật khẩu", pass), btn);
+  btn.onclick = () => send(btn, { login: login.value, password: pass.value })();
+  const key = mkEl("input", { type: "password", placeholder: "mcp_…", autocomplete: "off" });
+  const keyBtn = mkEl("button", { className: "mini", textContent: "Dùng khoá của bot" });
+  keyBtn.onclick = () => send(keyBtn, { key: key.value })();
+  return mkEl("div", {},
+    mkEl("div", { className: "var-controls" }, mkEl("label", {}, "Tài khoản", login), mkEl("label", {}, "Mật khẩu", pass), btn),
+    mkEl("div", { className: "var-controls", style: "margin-top:10px" }, mkEl("label", {}, "Hoặc khoá Manju của bot", key), keyBtn));
 }
 // Một dòng chọn người cho một nhãn Speaker; trả hàm đọc lựa chọn hiện tại.
 function messupSpeakerPick(label, people, prev, rows){

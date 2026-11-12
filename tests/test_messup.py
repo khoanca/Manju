@@ -31,6 +31,13 @@ class FakeMessup:
             if body["password"] != "messup-pass":
                 return httpx.Response(401, json={"error": "Sai tài khoản hoặc mật khẩu", "code": "UNAUTHORIZED"})
             return httpx.Response(200, json={"token": "mcp_tok", "user": {"id": 7, "login": body["login"], "name": "Lan", "role": "employee"}})
+        if request.headers.get("authorization") == "Bearer mcp_botkey" and path == "/api/me":
+            return httpx.Response(200, json={"id": 1, "login": "admin", "name": "", "role": "admin", "projectIds": [1],
+                                             "bot": {"id": 3, "name": "bot-kho", "projectId": 1}})
+        if request.headers.get("authorization") == "Bearer mcp_botkey":
+            request.headers["authorization"] = "Bearer mcp_tok"  # the fake answers a bot key like a token
+        if path == "/api/me" and request.headers.get("authorization") == "Bearer mcp_tok":
+            return httpx.Response(200, json={"id": 7, "login": "lan", "name": "Lan", "role": "employee", "projectIds": [1], "bot": None})
         if request.headers.get("authorization") != "Bearer mcp_tok":
             return httpx.Response(401, json={"error": "Chưa đăng nhập", "code": "UNAUTHORIZED"})
         if path == "/api/projects":
@@ -127,6 +134,24 @@ def test_link_stores_token_not_password_and_rejects_bad_password(ent, fake):
 
     assert ent.delete("/api/messup/link").json() == {"linked": False}
     assert ent.get("/api/messup/projects").status_code == 409
+
+
+def test_link_with_a_bot_key_sends_meetings_with_that_key(ent, fake):
+    wrong = ent.post("/api/messup/link", json={"key": "mcp_nope"})
+    assert wrong.status_code == 400 and "không nhận khoá" in wrong.json()["detail"]
+    person = ent.post("/api/messup/link", json={"key": "mcp_tok"})
+    assert person.status_code == 400 and "không phải khoá Manju của bot" in person.json()["detail"]
+    assert ent.post("/api/messup/link", json={}).status_code == 400
+
+    r = ent.post("/api/messup/link", json={"key": "mcp_botkey"})
+    assert r.status_code == 200, r.text
+    assert ent.get("/api/messup/status").json() == {"configured": True, "linked": True, "login": "bot:bot-kho", "name": "bot-kho"}
+    assert db.get_messup_link(me(ent))["token"] == "mcp_botkey"
+
+    tid = make_transcript(me(ent))
+    sent = ent.post(f"/api/transcripts/{tid}/messup", json={"speakers": []})
+    assert sent.status_code == 200, sent.text
+    assert len(fake.meetings) == 1 and "projectId" not in fake.meetings[0]
 
 
 def test_send_maps_segments_and_speakers_to_the_contract(ent, fake):

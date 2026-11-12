@@ -14,8 +14,10 @@ router = APIRouter()
 
 
 class LinkIn(BaseModel):
-    login: str
-    password: str
+    """Tài khoản + mật khẩu Messup, hoặc `key`: khoá Manju của một bot."""
+    login: str = ""
+    password: str = ""
+    key: str = ""
 
 
 class SpeakerIn(BaseModel):
@@ -66,6 +68,10 @@ def status(request: Request):
 @router.post("/api/messup/link")
 def link_account(body: LinkIn, request: Request):
     user = _user(request)
+    if body.key.strip():
+        return _link_bot_key(user, body.key.strip())
+    if not body.login.strip() or not body.password:
+        raise HTTPException(400, "Nhập tài khoản và mật khẩu Messup, hoặc dán khoá Manju của bot")
     try:
         res = messup.login(body.login.strip(), body.password)
     except messup.MessupError as exc:
@@ -76,6 +82,21 @@ def link_account(body: LinkIn, request: Request):
     db.set_messup_link(user["id"], res["token"], remote.get("login") or body.login.strip(),
                        remote.get("name") or "")
     return {"linked": True, "login": remote.get("login"), "name": remote.get("name")}
+
+
+def _link_bot_key(user: dict, key: str) -> dict:
+    """Khoá chỉ được lưu khi Messup nhận nó là khoá của một bot."""
+    try:
+        remote = messup.me(key)
+    except messup.MessupError as exc:
+        if exc.status == 401:
+            raise HTTPException(400, "Messup không nhận khoá này (sai, hoặc đã bị thu hồi)") from exc
+        raise _http(exc) from exc
+    bot = remote.get("bot")
+    if not bot:
+        raise HTTPException(400, "Đây không phải khoá Manju của bot. Lấy khoá ở trang bot trên Messup, mục Manju")
+    db.set_messup_link(user["id"], key, f"bot:{bot.get('name') or bot.get('id')}", bot.get("name") or "")
+    return {"linked": True, "login": f"bot:{bot.get('name')}", "name": bot.get("name")}
 
 
 @router.delete("/api/messup/link")

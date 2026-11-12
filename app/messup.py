@@ -1,8 +1,9 @@
 """FR-12 — gửi transcript sang Messup Enterprise (kho chung chat + họp của công ty).
 
 Hợp đồng: `docs/manju-contract.md` của repo messup-enterprise. Chỉ gửi TEXT theo
-segment; không có đường nào gửi audio. Mỗi user Manju liên kết một lần với tài
-khoản Messup của mình (Messup cấp token), vì quyền project ở Messup gán theo người.
+segment; không có đường nào gửi audio. Mỗi user Manju liên kết một lần: bằng tài
+khoản Messup của mình (Messup cấp token, quyền project theo người), hoặc bằng khoá
+Manju của một bot mà admin tạo ở trang bot của Messup (cuộc họp thuộc bot đó).
 
 `MESSUP_URL` chưa đặt → tính năng tắt hẳn (UI ẩn).
 """
@@ -65,6 +66,12 @@ def login(login_name: str, password: str) -> dict:
     """Đổi tài khoản/mật khẩu Messup lấy token agent. Mật khẩu không được lưu."""
     return _call("POST", "/api/login", body={"login": login_name, "password": password,
                                              "device": "manju"})
+
+
+def me(token: str) -> dict:
+    """Ai đứng sau token. Với khoá Manju của bot, `bot` cho biết bot nào (cuộc họp
+    gửi bằng khoá đó thuộc bot và tự vào project của bot)."""
+    return _call("GET", "/api/me", token=token)
 
 
 def projects(token: str) -> list[dict]:
