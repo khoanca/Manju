@@ -79,6 +79,11 @@ def link_account(body: LinkIn, request: Request):
             raise HTTPException(400, "Sai tài khoản hoặc mật khẩu Messup") from exc
         raise _http(exc) from exc
     remote = res.get("user") or {}
+    # Trên Messup, tài khoản thành viên chỉ đọc: gửi cuộc họp bằng nó sẽ bị từ chối
+    # ở từng lần gửi, nên báo ngay lúc liên kết và không lưu token.
+    if remote.get("role") != "admin":
+        raise HTTPException(400, "Tài khoản thành viên của Messup chỉ đọc, không gửi được cuộc họp. "
+                                 "Dùng tài khoản admin, hoặc dán khoá Manju của bot")
     db.set_messup_link(user["id"], res["token"], remote.get("login") or body.login.strip(),
                        remote.get("name") or "")
     return {"linked": True, "login": remote.get("login"), "name": remote.get("name")}

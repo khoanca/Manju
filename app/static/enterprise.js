@@ -280,14 +280,14 @@ async function messupJson(path, init){
   return data;
 }
 function messupLinkForm(note, again){
-  note.textContent = "Liên kết một lần để gửi cuộc họp vào kho chung của công ty: bằng tài khoản Messup của bạn, hoặc bằng khoá Manju của một bot (admin tạo ở trang bot trên Messup). Mật khẩu không được lưu ở Manju.";
+  note.textContent = "Liên kết một lần để gửi cuộc họp vào kho chung của công ty: bằng tài khoản admin của Messup, hoặc bằng khoá Manju của một bot (admin tạo ở trang bot trên Messup). Tài khoản thành viên chỉ đọc, không gửi được. Mật khẩu không được lưu ở Manju.";
   const fail = (btn) => (e) => { note.textContent = e.message; note.className = "var-note warn"; btn.disabled = false; };
   const send = (btn, body) => async () => {
     btn.disabled = true;
     try{ await messupJson("/api/messup/link", { method: "POST", body }); again(); }
     catch(e){ fail(btn)(e); }
   };
-  const login = mkEl("input", { placeholder: "Tài khoản Messup", autocomplete: "off" });
+  const login = mkEl("input", { placeholder: "Tài khoản admin Messup", autocomplete: "off" });
   const pass = mkEl("input", { type: "password", placeholder: "Mật khẩu Messup", autocomplete: "off" });
   const btn = mkEl("button", { className: "mini pri", textContent: "Liên kết" });
   btn.onclick = () => send(btn, { login: login.value, password: pass.value })();

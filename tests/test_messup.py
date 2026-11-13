@@ -30,7 +30,8 @@ class FakeMessup:
         if path == "/api/login":
             if body["password"] != "messup-pass":
                 return httpx.Response(401, json={"error": "Sai tài khoản hoặc mật khẩu", "code": "UNAUTHORIZED"})
-            return httpx.Response(200, json={"token": "mcp_tok", "user": {"id": 7, "login": body["login"], "name": "Lan", "role": "employee"}})
+            role = "employee" if body["login"] == "member" else "admin"
+            return httpx.Response(200, json={"token": "mcp_tok", "user": {"id": 7, "login": body["login"], "name": "Lan", "role": role}})
         if request.headers.get("authorization") == "Bearer mcp_botkey" and path == "/api/me":
             return httpx.Response(200, json={"id": 1, "login": "admin", "name": "", "role": "admin", "projectIds": [1],
                                              "bot": {"id": 3, "name": "bot-kho", "projectId": 1}})
@@ -122,6 +123,11 @@ def test_feature_is_off_until_messup_url_is_set(ent):
 def test_link_stores_token_not_password_and_rejects_bad_password(ent, fake):
     bad = ent.post("/api/messup/link", json={"login": "lan", "password": "wrong"})
     assert bad.status_code == 400 and "Sai tài khoản" in bad.json()["detail"]
+    assert ent.get("/api/messup/status").json()["linked"] is False
+
+    # Tài khoản thành viên của Messup chỉ đọc: không liên kết được, token không được lưu.
+    member = ent.post("/api/messup/link", json={"login": "member", "password": "messup-pass"})
+    assert member.status_code == 400 and "chỉ đọc" in member.json()["detail"]
     assert ent.get("/api/messup/status").json()["linked"] is False
 
     link(ent)
